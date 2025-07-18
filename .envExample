@@ -1,0 +1,50 @@
+# Gilgamesh Media Processing Service - Environment Configuration
+# Copy this file to .env and update with your actual values
+
+# =============================================================================
+# DATABASE CONFIGURATION
+# =============================================================================
+# PostgreSQL database settings
+PG_DBNAME=n8ndb     # Database name (public schema)
+PG_USER=n8n                    # PostgreSQL username
+PG_PASSWORD=password   # PostgreSQL password
+PG_HOST=192.168.0.47                   # PostgreSQL host
+PG_PORT=5432                        # PostgreSQL port
+
+# =============================================================================
+# AI PROVIDER CONFIGURATION
+# =============================================================================
+# AI provider selection (gemini is more cost-effective)
+AI_PROVIDER=gemini                  # Options: "openai" or "gemini"
+
+# OpenAI API (fallback provider)
+OPENAI_API_KEY=your-openai-api-key
+
+# Google Gemini API (primary provider - more cost-effective)
+GEMINI_API_KEY=your-gemini-api-key
+
+# =============================================================================
+# VECTOR DATABASE CONFIGURATION
+# =============================================================================
+# Qdrant vector database settings
+QDRANT_URL=http://192.168.0.47:6333    # Qdrant server URL
+QDRANT_API_KEY=your-qdrant-api-key
+
+# =============================================================================
+# PERFORMANCE & RATE LIMITING
+# =============================================================================
+# Request handling
+MAX_CONCURRENT_REQUESTS=10          # Maximum concurrent API requests
+REQUEST_TIMEOUT_SECONDS=30          # Request timeout in seconds
+
+# Environment settings
+ENVIRONMENT=development              # Options: "development" or "production"
+LOG_LEVEL=INFO                      # Logging level: DEBUG, INFO, WARNING, ERROR
+
+# =============================================================================
+# DOCKER CONFIGURATION (for development)
+# =============================================================================
+# These are automatically set by docker-compose.yml
+# DATABASE_URL=postgresql://gilgamesh:password@postgres:5432/gilgamesh
+# QDRANT_URL=http://qdrant:6333
+

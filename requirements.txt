@@ -1,0 +1,42 @@
+# Core web framework
+fastapi==0.104.1              # Modern web framework for APIs
+uvicorn[standard]==0.24.0     # ASGI server with standard extras
+python-multipart==0.0.6       # File upload handling
+
+# Video processing and media handling
+yt-dlp>=2023.11.16            # YouTube and social media downloading
+instaloader>=4.10.3           # Instagram content downloading
+moviepy>=1.0.3                # Video editing and processing
+opencv-python-headless==4.8.1.78  # Computer vision (headless)
+
+# Audio processing
+openai-whisper>=20231117      # Audio transcription
+
+# AI and ML
+openai>=1.0.0                 # OpenAI API client
+google-generativeai>=0.3.0    # Google Gemini API client
+
+# Database connections
+asyncpg>=0.29.0               # Async PostgreSQL driver
+psycopg2-binary>=2.9.0        # PostgreSQL adapter
+qdrant-client>=1.7.0          # Vector database client
+
+# Data processing
+numpy==1.26.2                 # Numerical computing
+pyyaml>=6.0.1                 # YAML configuration parsing
+requests>=2.31.0              # HTTP client library
+beautifulsoup4>=4.12.2        # HTML parsing
+python-dotenv>=1.0.0          # Environment variable management
+
+# File handling
+aiofiles>=23.2.1              # Async file operations
+
+# Testing (optional for production)
+pytest>=8.0.0                 # Testing framework
+pytest-asyncio>=0.23.5        # Async test support
+pytest-cov>=4.1.0             # Coverage reporting
+pytest-mock>=3.12.0           # Mocking utilities
+httpx>=0.26.0                 # HTTP client for testing
+
+# Security and performance
+cryptography>=41.0.0          # Cryptographic utilities 
