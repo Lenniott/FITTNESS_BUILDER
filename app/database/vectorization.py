@@ -1,0 +1,189 @@
+"""
+Vector database operations using Qdrant for semantic search.
+"""
+
+import asyncio
+import logging
+import os
+import uuid
+from typing import Dict, List, Optional
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+import openai
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# Qdrant client
+_qdrant_client = None
+
+def get_qdrant_client():
+    """Get Qdrant client instance."""
+    global _qdrant_client
+    if _qdrant_client is None:
+        qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+        api_key = os.getenv("QDRANT_API_KEY")
+        
+        if api_key:
+            _qdrant_client = QdrantClient(url=qdrant_url, api_key=api_key)
+        else:
+            _qdrant_client = QdrantClient(url=qdrant_url)
+    return _qdrant_client
+
+async def init_vector_store():
+    """Initialize Qdrant vector store."""
+    client = get_qdrant_client()
+    
+    # Create collection if it doesn't exist
+    try:
+        client.get_collection("exercises")
+        logger.info("Qdrant collection 'exercises' already exists")
+    except Exception:
+        client.create_collection(
+            collection_name="exercises",
+            vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+        )
+        logger.info("Created Qdrant collection 'exercises'")
+
+async def store_embedding(text: str, metadata: Dict) -> str:
+    """
+    Store text embedding in Qdrant.
+    
+    Args:
+        text: Text to embed
+        metadata: Additional metadata to store
+        
+    Returns:
+        Qdrant point ID
+    """
+    try:
+        # Generate embedding using OpenAI
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = client.embeddings.create(
+            model="text-embedding-ada-002",
+            input=text
+        )
+        
+        embedding = response.data[0].embedding
+        
+        # Generate unique ID
+        point_id = str(uuid.uuid4())
+        
+        # Store in Qdrant
+        qdrant_client = get_qdrant_client()
+        qdrant_client.upsert(
+            collection_name="exercises",
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=embedding,
+                    payload=metadata
+                )
+            ]
+        )
+        
+        logger.info(f"Stored embedding with ID: {point_id}")
+        return point_id
+        
+    except Exception as e:
+        logger.error(f"Error storing embedding: {str(e)}")
+        raise
+
+async def search_similar_exercises(
+    query: str,
+    limit: int = 10,
+    score_threshold: float = 0.7
+) -> List[Dict]:
+    """
+    Search for similar exercises using semantic similarity.
+    
+    Args:
+        query: Search query
+        limit: Maximum results to return
+        score_threshold: Minimum similarity score
+        
+    Returns:
+        List of similar exercises with scores
+    """
+    try:
+        # Generate embedding for query
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = client.embeddings.create(
+            model="text-embedding-ada-002",
+            input=query
+        )
+        
+        query_embedding = response.data[0].embedding
+        
+        # Search in Qdrant
+        qdrant_client = get_qdrant_client()
+        search_result = qdrant_client.search(
+            collection_name="exercises",
+            query_vector=query_embedding,
+            limit=limit,
+            score_threshold=score_threshold
+        )
+        
+        results = []
+        for point in search_result:
+            results.append({
+                'id': point.id,
+                'score': point.score,
+                'metadata': point.payload
+            })
+        
+        logger.info(f"Found {len(results)} similar exercises for query: {query}")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error searching similar exercises: {str(e)}")
+        return []
+
+async def delete_embedding(point_id: str) -> bool:
+    """
+    Delete embedding from Qdrant.
+    
+    Args:
+        point_id: Qdrant point ID
+        
+    Returns:
+        True if deleted, False if not found
+    """
+    try:
+        qdrant_client = get_qdrant_client()
+        qdrant_client.delete(
+            collection_name="exercises",
+            points_selector=[point_id]
+        )
+        
+        logger.info(f"Deleted embedding: {point_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error deleting embedding: {str(e)}")
+        return False
+
+async def get_collection_info() -> Dict:
+    """
+    Get information about the exercises collection.
+    
+    Returns:
+        Collection information
+    """
+    try:
+        qdrant_client = get_qdrant_client()
+        collection_info = qdrant_client.get_collection("exercises")
+        
+        return {
+            'name': collection_info.name,
+            'vectors_count': collection_info.points_count,
+            'vector_size': collection_info.config.params.vectors.size,
+            'distance': collection_info.config.params.vectors.distance.value
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting collection info: {str(e)}")
+        return {}

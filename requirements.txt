@@ -8,6 +8,7 @@ yt-dlp>=2023.11.16            # YouTube and social media downloading
 instaloader>=4.10.3           # Instagram content downloading
 moviepy>=1.0.3                # Video editing and processing
 opencv-python-headless==4.8.1.78  # Computer vision (headless)
+ffmpeg-python>=0.2.0          # FFmpeg Python bindings
 
 # Audio processing
 openai-whisper>=20231117      # Audio transcription
