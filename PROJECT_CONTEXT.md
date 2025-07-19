@@ -27,6 +27,14 @@ Gilgamesh is a modular video processing and AI analysis service that automatical
 3. Portainer image creation from main
 4. Container deployment with UI configuration
 
+## Container Volume Configuration
+- **fitness_storage** → `/app/storage` (individual clip storage)
+- **fitness_compiled** → `/app/storage/compiled_workouts` (compiled workout videos)
+- **fitness_temp** → `/app/app/temp` (temporary processing)
+- Video clips are stored in `/app/storage/clips/` inside container
+- Compiled workouts are stored in `/app/storage/compiled_workouts/` inside container
+- Database stores paths relative to container filesystem
+
 ## Environment Setup
 - Python 3.11+ required
 - FFmpeg for video processing

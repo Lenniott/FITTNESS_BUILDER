@@ -24,11 +24,14 @@ docker-compose up -d --build
 ### 3. Portainer Deployment
 1. **Build the image** using the Dockerfile
 2. **Assign network** to your existing PostgreSQL and Qdrant network
-3. **Mount volumes** for persistent clip storage:
-   - `/app/storage` → Your clips directory
-   - `/app/app/temp` → Temporary processing directory
+3. **Mount volumes** for persistent storage:
+   - `fitness_storage` → `/app/storage` (individual clip storage)
+   - `fitness_compiled` → `/app/storage/compiled_workouts` (compiled workout videos)
+   - `fitness_temp` → `/app/app/temp` (temporary processing)
 4. **Set environment variables** from your `.env` file
 5. **Expose port** 8000
+
+**Note**: The container expects video clips to be stored in `/app/storage/clips/` inside the container, which maps to your host volume `fitness_storage`.
 
 ## 📊 API Endpoints
 

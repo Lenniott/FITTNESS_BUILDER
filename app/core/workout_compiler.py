@@ -470,8 +470,8 @@ Format as clear, actionable instructions.
                            format: str) -> str:
         """Use FFmpeg to stitch clips into final workout video."""
         
-        # Create output directory
-        output_dir = Path("storage/compiled_workouts")
+        # Create output directory for compiled workouts
+        output_dir = Path("/app/storage/compiled_workouts")
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Generate unique filename
@@ -483,17 +483,17 @@ Format as clear, actionable instructions.
         
         with open(temp_list_file, 'w') as f:
             for clip in clips:
-                # Fix video path to use correct relative path
+                # Fix video path to use correct container path
                 video_path = clip['video_path']
-                if video_path.startswith('/tmp/'):
-                    # Remove /tmp/ prefix and use relative path from project root
-                    video_path = video_path.replace('/tmp/', '')
+                if video_path.startswith('/tmp/storage/'):
+                    # Convert /tmp/storage/ to /app/storage/ for container paths
+                    video_path = video_path.replace('/tmp/storage/', '/app/storage/')
                 elif video_path.startswith('storage/'):
-                    # Already correct relative path
-                    pass
-                else:
-                    # Assume it's a relative path from project root
-                    pass
+                    # Convert relative storage/ to absolute /app/storage/
+                    video_path = video_path.replace('storage/', '/app/storage/')
+                elif not video_path.startswith('/app/'):
+                    # Assume it's a relative path, make it absolute
+                    video_path = f"/app/storage/clips/{os.path.basename(video_path)}"
                 
                 # Add clip with duration info
                 f.write(f"file '{video_path}'\n")
