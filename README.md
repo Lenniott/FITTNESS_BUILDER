@@ -50,7 +50,8 @@ docker-compose up -d --build
 - `QDRANT_URL` - Qdrant server URL
 - `QDRANT_API_KEY` - Qdrant API key
 - `OPENAI_API_KEY` - OpenAI API key
-- `GEMINI_API_KEY` - Gemini API key
+- `GEMINI_API_KEY` - Gemini API key (primary)
+- `GEMINI_API_BACKUP_KEY` - Gemini API key (backup/fallback)
 
 ## 🏗️ Architecture
 
@@ -58,7 +59,7 @@ docker-compose up -d --build
 - **PostgreSQL** - Exercise metadata storage
 - **Qdrant** - Vector database for semantic search
 - **FFmpeg** - Video processing and clip generation
-- **OpenAI/Gemini** - AI analysis and transcription
+- **OpenAI/Gemini** - AI analysis and transcription (with automatic fallback)
 - **Instagram Carousel Support** - Automatic detection and processing of multi-item posts
 
 ## 📁 Project Structure

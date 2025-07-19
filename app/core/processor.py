@@ -48,14 +48,28 @@ class VideoProcessor:
             self.openai_client = OpenAI(api_key=api_key)
         return self.openai_client
     
-    def _get_gemini_model(self):
+    def _get_gemini_model(self, use_backup=False):
         """Get Gemini model, initializing if needed."""
-        if self.gemini_model is None:
-            api_key = os.getenv("GEMINI_API_KEY")
+        if self.gemini_model is None or use_backup:
+            # Try primary key first, then backup key
+            api_key = os.getenv("GEMINI_API_KEY" if not use_backup else "GEMINI_API_BACKUP_KEY")
             if not api_key:
-                raise ValueError("GEMINI_API_KEY environment variable not set")
-            genai.configure(api_key=api_key)
-            self.gemini_model = genai.GenerativeModel('models/gemini-2.5-flash-lite-preview-06-17')
+                if use_backup:
+                    raise ValueError("Both GEMINI_API_KEY and GEMINI_API_BACKUP_KEY environment variables not set")
+                else:
+                    raise ValueError("GEMINI_API_KEY environment variable not set")
+            
+            # Configure with the selected API key
+            genai.configure(api_key=api_key)  # type: ignore
+            model = genai.GenerativeModel('models/gemini-2.5-flash-lite-preview-06-17')  # type: ignore
+            
+            # If using backup key, return the model directly (don't cache it)
+            if use_backup:
+                return model
+            
+            # Cache the primary model
+            self.gemini_model = model
+        
         return self.gemini_model
         
     async def process_video(self, url: str) -> Dict:
@@ -237,9 +251,19 @@ Focus on identifying distinct exercises with clear start/end times. Provide comp
             logger.info(f"Saved AI debug data to: {debug_file}")
         
         try:
-            # Call Gemini with multimodal input
-            gemini_model = self._get_gemini_model()
-            response = gemini_model.generate_content([prompt] + frame_data)
+            # Call Gemini with multimodal input (try primary key first)
+            try:
+                gemini_model = self._get_gemini_model(use_backup=False)
+                response = gemini_model.generate_content([prompt] + frame_data)
+                logger.info("Successfully used primary Gemini API key")
+            except Exception as primary_error:
+                logger.warning(f"Primary Gemini API failed: {str(primary_error)}")
+                logger.info("Attempting to use backup Gemini API key...")
+                
+                # Try backup key
+                gemini_model = self._get_gemini_model(use_backup=True)
+                response = gemini_model.generate_content([prompt] + frame_data)
+                logger.info("Successfully used backup Gemini API key")
             
             # Parse JSON response with better error handling
             response_text = response.text.strip()

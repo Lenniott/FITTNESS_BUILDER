@@ -40,6 +40,7 @@ All notable changes to this project will be documented in this file.
 
 ### AI Integration
 - **Gemini Multimodal Analysis**: Processes video frames + transcript + metadata
+- **Automatic API Fallback**: Seamless fallback from primary to backup Gemini API key
 - **Structured Exercise Output**: Complete exercise details (name, instructions, benefits, etc.)
 - **Fallback Detection**: Keyword-based exercise detection when AI fails
 - **Confidence Scoring**: AI confidence levels for exercise detection
@@ -126,6 +127,13 @@ CREATE TABLE exercises (
 - **Removed empty files**: Cleaned up empty documentation and configuration files
 - **Updated documentation**: Enhanced README, CHANGELOG, and PROJECT_CONTEXT with latest features
 - **Improved project structure**: Clean, organized codebase with proper separation of concerns
+
+### AI Provider Enhancements
+- **Gemini API Fallback**: Automatic fallback from primary to backup Gemini API key on failure
+- **Robust Error Handling**: Graceful degradation when primary API key hits rate limits or quota
+- **Enhanced Logging**: Clear logging of which API key is being used for debugging
+- **Environment Configuration**: Added `GEMINI_API_BACKUP_KEY` environment variable support
+- **Comprehensive Testing**: Added unit tests for fallback mechanism with 100% test coverage
 
 ## [Initial] - 2025-01-18
 

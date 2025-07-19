@@ -8,13 +8,13 @@ Gilgamesh is a modular video processing and AI analysis service that automatical
 - **Modular Structure**: Clear separation between API, core logic, database, services, and utils
 - **PostgreSQL**: Primary database for exercise metadata storage with timing data
 - **Qdrant**: Vector database for AI embeddings and semantic search
-- **AI Providers**: Google Gemini (primary, cost-effective) + OpenAI (fallback)
+- **AI Providers**: Google Gemini (primary + backup keys, cost-effective) + OpenAI (fallback)
 - **Video Processing**: FFmpeg for clip generation, OpenCV for frame analysis
 
 ## Key Components
 - **Video Processing**: yt-dlp for downloads, FFmpeg for clip generation, OpenCV for frame analysis
 - **Audio Processing**: OpenAI Whisper for transcription with Instagram caption handling
-- **AI Analysis**: Exercise detection with Gemini multimodal analysis, scene detection, content analysis
+- **AI Analysis**: Exercise detection with Gemini multimodal analysis (automatic fallback between API keys), scene detection, content analysis
 - **Storage**: Permanent clip storage in `storage/clips/` with database metadata
 - **Database**: PostgreSQL for exercise data with start/end timing, Qdrant for vector search
 - **Testing**: Pytest with async support and coverage reporting
