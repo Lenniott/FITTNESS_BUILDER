@@ -142,3 +142,17 @@ CREATE TABLE exercises (
 - Downloader component for YouTube, TikTok, and Instagram
 - Unit tests for downloader functionality
 - Project documentation and context files
+### Video Quality & Duration Filtering
+- **Minimum Clip Duration**: Added 5-second minimum duration filter for generated clips
+- **Maximum Clip Duration**: Added 60-second maximum duration filter to avoid overly long clips
+- **Video Quality Validation**: Added checks for video resolution, frame rate, and duration
+- **Confidence Score Filtering**: Skip exercises with confidence scores below 0.3
+- **Enhanced AI Prompt**: Updated Gemini prompt to be more selective about exercise detection
+
+### Video Quality & Duration Filtering (Latest)
+- **Minimum Clip Duration**: Added 5-second minimum duration filter for generated clips
+- **Maximum Clip Duration**: Added 60-second maximum duration filter to avoid overly long clips
+- **Video Quality Validation**: Added checks for video resolution (320x240 min), frame rate (10 fps min), and duration (10s-600s)
+- **Confidence Score Filtering**: Skip exercises with confidence scores below 0.3
+- **Enhanced AI Prompt**: Updated Gemini prompt to be more selective about exercise detection
+- **Unit Tests**: Added comprehensive tests for clip filtering and video quality validation

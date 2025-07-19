@@ -124,19 +124,6 @@ class VideoProcessor:
             download_result = await download_media_and_metadata(url)
             temp_dir = download_result['temp_dir']
             
-            # Validate video quality before processing
-            video_file = download_result['files'][0] if download_result['files'] else None
-            if video_file and not self._validate_video_quality(video_file):
-                logger.warning(f"⚠️  Skipping video due to quality issues: {video_file}")
-                return {
-                    "success": False,
-                    "processed_clips": [],
-                    "total_clips": 0,
-                    "processing_time": time.time() - start_time,
-                    "temp_dir": temp_dir,
-                    "error": "Video quality validation failed"
-                }
-            
             # Check if this is a carousel with multiple files
             is_carousel = download_result.get('is_carousel', False)
             carousel_count = download_result.get('carousel_count', 1)
@@ -247,14 +234,6 @@ For each distinct exercise you identify, provide a JSON response with:
 }}
 
 Focus on identifying distinct exercises with clear start/end times. Provide comprehensive details for each exercise.
-
-IMPORTANT FILTERING CRITERIA:
-- Only detect exercises that are 5+ seconds long
-- Skip brief demonstrations or transitions
-- Focus on complete exercise movements
-- Avoid repetitive or low-quality segments
-- Ensure exercises have clear start and end points
-- Prefer exercises with instructional value
 """
         
         # Save AI prompt and metadata to temp directory for debugging
@@ -369,49 +348,9 @@ IMPORTANT FILTERING CRITERIA:
                     break
         
         return exercises
-
-    def _validate_video_quality(self, video_file: str) -> bool:
-        """Validate video quality and return True if video is worth processing."""
-        try:
-            cap = cv2.VideoCapture(video_file)
-            if not cap.isOpened():
-                logger.warning("⚠️  Video file cannot be opened")
-                return False
-            
-            # Get video properties
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = total_frames / fps if fps > 0 else 0
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            cap.release()
-            
-            # Quality checks
-            if duration < 10.0:
-                logger.warning(f"⚠️  Video too short: {duration:.1f}s")
-                return False
-            
-            if duration > 600.0:  # 10 minutes
-                logger.warning(f"⚠️  Video too long: {duration:.1f}s")
-                return False
-            
-            if width < 320 or height < 240:
-                logger.warning(f"⚠️  Video resolution too low: {width}x{height}")
-                return False
-            
-            if fps < 10:
-                logger.warning(f"⚠️  Video frame rate too low: {fps:.1f} fps")
-                return False
-            
-            logger.info(f"✅ Video quality validated: {duration:.1f}s, {width}x{height}, {fps:.1f} fps")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Error validating video quality: {str(e)}")
-            return False
     
     async def _generate_clips(self, video_file: str, exercises: List[Dict], 
-                             temp_dir: str, min_duration: float = 5.0) -> List[Dict]:
+                             temp_dir: str) -> List[Dict]:
         """Generate video clips for each detected exercise."""
         clips = []
         
@@ -437,22 +376,6 @@ IMPORTANT FILTERING CRITERIA:
                 # Extract clip using subprocess and ffmpeg
                 start_time = exercise['start_time']
                 duration = exercise['end_time'] - exercise['start_time']
-                
-                # Filter out clips that are too short
-                if duration < min_duration:
-                    logger.warning(f"⚠️  Skipping {exercise['exercise_name']} - duration {duration:.1f}s < {min_duration}s minimum")
-                    continue
-                
-                # Filter out clips that are too long (likely not useful)
-                if duration > 60.0:
-                    logger.warning(f"⚠️  Skipping {exercise['exercise_name']} - duration {duration:.1f}s > 60s maximum")
-                    continue
-                
-                # Check if the exercise has meaningful content
-                if exercise.get('confidence_score', 0) < 0.3:
-                    logger.warning(f"⚠️  Skipping {exercise['exercise_name']} - low confidence score {exercise.get('confidence_score', 0):.2f}")
-                    continue
-                
                 logger.info(f"Extracting clip: {start_time}s to {exercise['end_time']}s (duration: {duration}s)")
                 
                 ffmpeg_cmd = [
