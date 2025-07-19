@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Video Compilation Pipeline**: Complete workout generation from natural language requirements
+- **Two-Stage AI Workflow**: Requirement story generation + content retrieval and compilation
+- **Workout Compilation API**: New endpoints for generating personalized workout videos
+- **Database Schema**: `compiled_workouts` table for storing workout compilation results
+- **Vector Search Integration**: Leverages existing exercise database for content retrieval
+- **FFmpeg Video Compilation**: Stitches selected clips into complete workout videos
+- **Exercise Script Generation**: AI-enhanced exercise instructions for each clip
 - **Complete `/process` endpoint implementation** following exact specifications
 - **Video Processing Pipeline**: Download → Transcribe → Extract Frames → AI Detection → Generate Clips → Store
 - **AI Exercise Detection**: Gemini multimodal analysis with comprehensive exercise details
@@ -38,6 +45,14 @@ All notable changes to this project will be documented in this file.
 - `GET /api/v1/health/vector` - Vector database health check
 - `GET /api/v1/stats` - Processing statistics
 
+### Workout Compilation API Endpoints
+- `POST /api/v1/workout/generate` - Generate personalized workout from natural language
+- `GET /api/v1/workout/{workout_id}` - Get compiled workout by ID
+- `GET /api/v1/workout/{workout_id}/download` - Download compiled workout video
+- `GET /api/v1/workouts` - List all compiled workouts
+- `DELETE /api/v1/workout/{workout_id}` - Delete compiled workout
+- `GET /api/v1/workout/{workout_id}/status` - Get workout generation status
+
 ### AI Integration
 - **Gemini Multimodal Analysis**: Processes video frames + transcript + metadata
 - **Automatic API Fallback**: Seamless fallback from primary to backup Gemini API key
@@ -47,6 +62,7 @@ All notable changes to this project will be documented in this file.
 
 ### Database Schema
 ```sql
+-- Exercises table (existing)
 CREATE TABLE exercises (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     url VARCHAR(500) NOT NULL,
@@ -59,6 +75,18 @@ CREATE TABLE exercises (
     rounds_reps VARCHAR(200),
     intensity INTEGER CHECK (intensity >= 0 AND intensity <= 10),
     qdrant_id UUID,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Compiled workouts table (new)
+CREATE TABLE compiled_workouts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_requirements TEXT NOT NULL,
+    target_duration INTEGER NOT NULL, -- in seconds
+    format VARCHAR(10) DEFAULT 'square', -- 'square' or 'vertical'
+    intensity_level VARCHAR(20) DEFAULT 'beginner', -- 'beginner', 'intermediate', 'advanced'
+    video_path VARCHAR(500) NOT NULL,
+    actual_duration INTEGER NOT NULL, -- actual duration in seconds
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```

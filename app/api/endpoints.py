@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Import compilation endpoints
+from app.api.compilation_endpoints import router as compilation_router
+
 # Pydantic models for request/response
 class ProcessRequest(BaseModel):
     url: HttpUrl
