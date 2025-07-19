@@ -36,6 +36,9 @@ docker-compose up -d --build
 - `POST /api/v1/process` - Process fitness video
 - `GET /api/v1/exercises` - List all exercises
 - `POST /api/v1/exercises/semantic-search` - Semantic search
+- `DELETE /api/v1/exercises/all` - Delete all exercises and clips
+- `DELETE /api/v1/exercises/url/{url}` - Delete exercises for specific URL
+- `DELETE /api/v1/exercises/{id}` - Delete specific exercise
 
 ## 🔧 Configuration
 
@@ -56,6 +59,7 @@ docker-compose up -d --build
 - **Qdrant** - Vector database for semantic search
 - **FFmpeg** - Video processing and clip generation
 - **OpenAI/Gemini** - AI analysis and transcription
+- **Instagram Carousel Support** - Automatic detection and processing of multi-item posts
 
 ## 📁 Project Structure
 

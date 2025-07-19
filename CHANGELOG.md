@@ -91,6 +91,7 @@ CREATE TABLE exercises (
 - ✅ **Docker Deployment**: Production-ready containerization with FFmpeg, connects to external PostgreSQL and Qdrant
 - ✅ **Carousel Support**: Automatic processing of Instagram carousel items with duplicate prevention
 - ✅ **Data Cleanup**: Comprehensive delete endpoints for database, vector store, and file cleanup
+- ✅ **Proper Carousel Implementation**: One URL → detect carousel count → download each item individually → process each video
 
 ### Tested
 - All 13 tests passing (10 unit tests + 3 integration tests)
@@ -103,6 +104,7 @@ CREATE TABLE exercises (
 - **API Endpoints**: All endpoints tested and working correctly
 - **Docker Deployment**: Containerized application running successfully in production
 - **Carousel Processing**: Instagram carousel detection and multi-item processing
+- **Proper Carousel Implementation**: Correctly detects carousel count, downloads each item individually, processes each video without cascade effects
 
 ### Dependencies
 - Added ffmpeg via Homebrew for video processing
@@ -118,6 +120,12 @@ CREATE TABLE exercises (
 - **Simplified setup**: No need to manually export environment variables - just configure `.env` file
 - **Fixed type annotations**: Improved type safety in transcription service
 - **Verified functionality**: All imports working correctly despite linter warnings (false positives)
+
+### Project Cleanup
+- **Organized test files**: Moved all test files to proper `tests/` directory structure
+- **Removed empty files**: Cleaned up empty documentation and configuration files
+- **Updated documentation**: Enhanced README, CHANGELOG, and PROJECT_CONTEXT with latest features
+- **Improved project structure**: Clean, organized codebase with proper separation of concerns
 
 ## [Initial] - 2025-01-18
 

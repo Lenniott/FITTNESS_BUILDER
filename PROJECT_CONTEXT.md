@@ -18,6 +18,8 @@ Gilgamesh is a modular video processing and AI analysis service that automatical
 - **Storage**: Permanent clip storage in `storage/clips/` with database metadata
 - **Database**: PostgreSQL for exercise data with start/end timing, Qdrant for vector search
 - **Testing**: Pytest with async support and coverage reporting
+- **Carousel Support**: Proper Instagram carousel detection and individual item processing
+- **Data Management**: Comprehensive delete endpoints for cleanup across database, vector store, and files
 
 ## Development Workflow
 1. Local development with docker-compose
