@@ -6,15 +6,17 @@ Gilgamesh is a modular video processing and AI analysis service that automatical
 ## Core Architecture
 - **FastAPI Backend**: Modern async web framework with rate limiting and CORS
 - **Modular Structure**: Clear separation between API, core logic, database, services, and utils
-- **PostgreSQL**: Primary database for metadata storage (public schema)
-- **Qdrant**: Vector database for AI embeddings
+- **PostgreSQL**: Primary database for exercise metadata storage with timing data
+- **Qdrant**: Vector database for AI embeddings and semantic search
 - **AI Providers**: Google Gemini (primary, cost-effective) + OpenAI (fallback)
+- **Video Processing**: FFmpeg for clip generation, OpenCV for frame analysis
 
 ## Key Components
-- **Video Processing**: yt-dlp for downloads, MoviePy for editing, OpenCV for frame analysis
-- **Audio Processing**: OpenAI Whisper for transcription
-- **AI Analysis**: Scene detection, content analysis, clip curation
-- **Storage**: File-based clip storage with cleanup utilities
+- **Video Processing**: yt-dlp for downloads, FFmpeg for clip generation, OpenCV for frame analysis
+- **Audio Processing**: OpenAI Whisper for transcription with Instagram caption handling
+- **AI Analysis**: Exercise detection with Gemini multimodal analysis, scene detection, content analysis
+- **Storage**: Permanent clip storage in `storage/clips/` with database metadata
+- **Database**: PostgreSQL for exercise data with start/end timing, Qdrant for vector search
 - **Testing**: Pytest with async support and coverage reporting
 
 ## Development Workflow
@@ -47,8 +49,9 @@ app/
 ```
 
 ## Dependencies Focus
-- Video processing: yt-dlp, moviepy, opencv-python-headless
+- Video processing: yt-dlp, ffmpeg-python, opencv-python-headless
 - AI/ML: openai, google-generativeai, openai-whisper
 - Database: asyncpg, psycopg2-binary, qdrant-client
 - Web framework: fastapi, uvicorn, python-multipart
-- Testing: pytest, pytest-asyncio, pytest-cov 
+- Testing: pytest, pytest-asyncio, pytest-cov
+- Environment: python-dotenv for configuration management 

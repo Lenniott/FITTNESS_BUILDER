@@ -7,6 +7,10 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel, HttpUrl
 import asyncio
+import os
+from pathlib import Path
+import uuid
+import subprocess
 
 from app.core.processor import processor
 from app.database.operations import (
@@ -37,6 +41,8 @@ class ExerciseResponse(BaseModel):
     id: str
     exercise_name: str
     video_path: str
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
     how_to: str
     benefits: str
     counteracts: str
@@ -106,13 +112,7 @@ async def get_exercises(url: Optional[str] = Query(None, description="Filter by 
         # Convert UUID and datetime to strings for Pydantic
         converted_exercises = []
         for exercise in exercises:
-            # Support both dict and object
-            if hasattr(exercise, 'dict'):
-                exercise_dict = exercise.dict()
-            elif hasattr(exercise, '__dict__'):
-                exercise_dict = dict(exercise.__dict__)
-            else:
-                exercise_dict = dict(exercise)
+            exercise_dict = dict(exercise)
             if 'id' in exercise_dict and exercise_dict['id'] is not None:
                 exercise_dict['id'] = str(exercise_dict['id'])
             if 'created_at' in exercise_dict and exercise_dict['created_at'] is not None:
@@ -131,12 +131,7 @@ async def get_exercise(exercise_id: str):
         if not exercise:
             raise HTTPException(status_code=404, detail="Exercise not found")
         # Convert UUID and datetime to strings for Pydantic
-        if hasattr(exercise, 'dict'):
-            exercise_dict = exercise.dict()
-        elif hasattr(exercise, '__dict__'):
-            exercise_dict = dict(exercise.__dict__)
-        else:
-            exercise_dict = dict(exercise)
+        exercise_dict = dict(exercise)
         if 'id' in exercise_dict and exercise_dict['id'] is not None:
             exercise_dict['id'] = str(exercise_dict['id'])
         if 'created_at' in exercise_dict and exercise_dict['created_at'] is not None:
@@ -207,6 +202,145 @@ async def delete_exercise_endpoint(exercise_id: str):
     except Exception as e:
         logger.error(f"Error deleting exercise {exercise_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete exercise: {str(e)}")
+
+@router.post("/exercises/{exercise_id}/generate-clip")
+async def generate_clip_from_database(exercise_id: str):
+    """Generate a clip for an exercise using its stored start/end times."""
+    try:
+        # Get exercise from database
+        exercise = await get_exercise_by_id(exercise_id)
+        if not exercise:
+            raise HTTPException(status_code=404, detail="Exercise not found")
+        
+        # Check if we have start/end times
+        if not exercise.get('start_time') or not exercise.get('end_time'):
+            raise HTTPException(status_code=400, detail="Exercise missing start_time or end_time")
+        
+        # Find the original video file
+        video_path = exercise.get('video_path', '')
+        if not video_path or not os.path.exists(video_path):
+            # Try to find the original video in temp directories
+            temp_dirs = [d for d in Path("app/temp").iterdir() if d.is_dir() and d.name.startswith("gilgamesh_download_")]
+            video_file = None
+            for temp_dir in temp_dirs:
+                video_files = list(temp_dir.glob("*.mp4"))
+                if video_files:
+                    video_file = str(video_files[0])
+                    break
+            
+            if not video_file:
+                raise HTTPException(status_code=404, detail="Original video file not found")
+        else:
+            video_file = video_path
+        
+        # Generate clip using ffmpeg
+        start_time = exercise['start_time']
+        end_time = exercise['end_time']
+        duration = end_time - start_time
+        
+        # Create clips directory
+        clips_dir = Path("storage/clips")
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate clip filename
+        exercise_name_clean = exercise['exercise_name'].replace(' ', '_').lower()
+        clip_filename = f"{exercise_name_clean}_{uuid.uuid4().hex[:8]}.mp4"
+        clip_path = clips_dir / clip_filename
+        
+        # Run ffmpeg
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-y',
+            '-i', video_file,
+            '-ss', str(start_time),
+            '-t', str(duration),
+            '-c:v', 'libx264',
+            '-c:a', 'aac',
+            str(clip_path)
+        ]
+        
+        logger.info(f"Generating clip for exercise {exercise_id}: {exercise['exercise_name']}")
+        logger.info(f"Command: {' '.join(ffmpeg_cmd)}")
+        
+        # Run ffmpeg in thread pool
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60
+            )
+        )
+        
+        if result.returncode == 0 and clip_path.exists():
+            file_size = clip_path.stat().st_size
+            return {
+                "success": True,
+                "exercise_id": exercise_id,
+                "exercise_name": exercise['exercise_name'],
+                "clip_path": str(clip_path),
+                "file_size": file_size,
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration": duration
+            }
+        else:
+            logger.error(f"ffmpeg failed: {result.stderr}")
+            raise HTTPException(status_code=500, detail="Failed to generate clip")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating clip for exercise {exercise_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate clip: {str(e)}")
+
+class SemanticSearchRequest(BaseModel):
+    query: str
+    limit: int = 10
+
+@router.post("/exercises/semantic-search")
+async def semantic_search_exercises(request: SemanticSearchRequest):
+    """
+    Search exercises using natural language queries.
+    
+    Example queries:
+    - "I haven't worked out in a month, need mobility and strength, nothing too intense"
+    - "I sit a lot all day, need something for my back and hips"
+    - "I'm advanced, want high intensity cardio"
+    """
+    try:
+        # Search for similar exercises
+        similar_exercises = await search_similar_exercises(request.query, limit=request.limit)
+        
+        # Format results with exercise details
+        results = []
+        for exercise in similar_exercises:
+            metadata = exercise['metadata']
+            results.append({
+                'exercise_id': exercise['id'],
+                'exercise_name': metadata.get('exercise_name', 'Unknown Exercise'),
+                'video_path': metadata.get('video_path', ''),
+                'fitness_level': metadata.get('fitness_level', 5),
+                'intensity': metadata.get('intensity', 5),
+                'duration': metadata.get('duration', 0),
+                'benefits': metadata.get('benefits', ''),
+                'counteracts': metadata.get('counteracts', ''),
+                'how_to': metadata.get('how_to', ''),
+                'similarity_score': exercise['score']
+            })
+        
+        return {
+            "query": request.query,
+            "results": results,
+            "total_found": len(results)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in semantic search: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Semantic search failed: {str(e)}")
 
 @router.get("/health/database")
 async def health_database():

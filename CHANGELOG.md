@@ -69,29 +69,33 @@ CREATE TABLE exercises (
 - Improved transcript handling for Instagram videos: now always uses Whisper for audio transcription, never just the caption.
 - Added debug output for all AI and transcript data in temp directories for every processed video.
 - Improved error logging and diagnostics for ffmpeg clip generation.
+- Added start_time and end_time fields to database schema and API responses
+- Updated clip generation to use database timing data
 
-### Known Issues
-- **Clip Generation Hangs at ffmpeg Step**: When generating exercise clips, the ffmpeg-python call hangs and the process is suspended (tty output). Manual ffmpeg and direct ffmpeg-python calls work, but the API flow hangs.
+### Resolved Issues
+- **Clip Generation Fixed**: Replaced ffmpeg-python with direct subprocess.run for better async compatibility
+- **Database Schema Updated**: Added start_time and end_time columns for exercise timing data
+- **Storage Location Fixed**: Clips now stored permanently in `storage/clips/` instead of temp directories
+- **Type Safety Improved**: Fixed Optional parameter types in database functions and API responses
+- **Instagram Transcription**: Always uses Whisper for Instagram videos (never just captions)
 
-#### Investigation
-- Confirmed ffmpeg is installed and works from the command line.
-- Confirmed ffmpeg-python is installed and works in a standalone script.
-- The issue only occurs in the FastAPI/async context, not in direct scripts.
-- The process is suspended with 'tty output', suggesting a possible output buffer or event loop/threading conflict.
-- No clips are created in the expected directory when run via the API.
-
-#### Next Steps
-- Try running ffmpeg with output capture enabled (`capture_stdout=True, capture_stderr=True`) in ffmpeg-python.
-- If that fails, switch to using `subprocess.run` for clip extraction instead of ffmpeg-python.
-- Ensure all file paths are correct and not locked by other processes.
-- Consider running the API server in the foreground or with proper output redirection to avoid TTY issues.
-- Continue to monitor for resource or permission issues.
+### Current Status
+- ✅ **Full Pipeline Working**: Download → Transcribe → AI Detection → Clip Generation → Database Storage
+- ✅ **Clip Generation**: Successfully creates clips using FFmpeg with subprocess.run
+- ✅ **Database Integration**: PostgreSQL stores exercise data with timing information
+- ✅ **Vector Search**: Qdrant integration for semantic exercise search
+- ✅ **Permanent Storage**: Clips stored in `storage/clips/` with database metadata
+- ✅ **API Endpoints**: Complete REST API with health checks, search, and statistics
 
 ### Tested
 - All 13 tests passing (10 unit tests + 3 integration tests)
 - YouTube download functionality working with real videos
 - URL detection and validation working correctly
 - Error handling for unsupported domains working
+- **Full Pipeline Tested**: Instagram video processing with clip generation and database storage
+- **Clip Generation**: Successfully creates 15.1s clip from 5.6s-20.7s timing data
+- **Database Storage**: Exercise stored with complete metadata and timing information
+- **API Endpoints**: All endpoints tested and working correctly
 
 ### Dependencies
 - Added ffmpeg via Homebrew for video processing

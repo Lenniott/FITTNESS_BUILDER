@@ -37,56 +37,89 @@ async def init_vector_store():
     """Initialize Qdrant vector store."""
     client = get_qdrant_client()
     
-    # Create collection if it doesn't exist
+    # Create fitness_video_clips collection if it doesn't exist
     try:
-        client.get_collection("exercises")
-        logger.info("Qdrant collection 'exercises' already exists")
+        client.get_collection("fitness_video_clips")
+        logger.info("Qdrant collection 'fitness_video_clips' already exists")
     except Exception:
         client.create_collection(
-            collection_name="exercises",
+            collection_name="fitness_video_clips",
             vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
         )
-        logger.info("Created Qdrant collection 'exercises'")
+        logger.info("Created Qdrant collection 'fitness_video_clips'")
 
-async def store_embedding(text: str, metadata: Dict) -> str:
+async def store_embedding(exercise_data: Dict) -> str:
     """
-    Store text embedding in Qdrant.
+    Store exercise embedding in Qdrant with comprehensive text chunk.
     
     Args:
-        text: Text to embed
-        metadata: Additional metadata to store
+        exercise_data: Complete exercise data including name, instructions, benefits, etc.
         
     Returns:
         Qdrant point ID
     """
     try:
+        # Create comprehensive text chunk for semantic search
+        text_chunk = f"""
+Exercise: {exercise_data['exercise_name']}
+
+Instructions: {exercise_data['how_to']}
+
+Benefits: {exercise_data['benefits']}
+
+Problems it solves: {exercise_data['counteracts']}
+
+Duration/Reps: {exercise_data['rounds_reps']}
+
+Fitness Level: {exercise_data['fitness_level']}/10 (Beginner: 1-3, Intermediate: 4-7, Advanced: 8-10)
+
+Intensity: {exercise_data['intensity']}/10 (Low: 1-3, Moderate: 4-7, High: 8-10)
+
+This exercise is suitable for {exercise_data['fitness_level']} level fitness and has {exercise_data['intensity']} intensity.
+It helps with {exercise_data['counteracts']} and provides {exercise_data['benefits']}.
+        """.strip()
+        
+        # Create metadata for filtering and retrieval
+        metadata = {
+            'exercise_name': exercise_data['exercise_name'],
+            'video_path': exercise_data['video_path'],
+            'fitness_level': exercise_data['fitness_level'],
+            'intensity': exercise_data['intensity'],
+            'start_time': exercise_data.get('start_time'),
+            'end_time': exercise_data.get('end_time'),
+            'duration': exercise_data.get('end_time', 0) - exercise_data.get('start_time', 0),
+            'how_to': exercise_data['how_to'],
+            'benefits': exercise_data['benefits'],
+            'counteracts': exercise_data['counteracts'],
+            'rounds_reps': exercise_data['rounds_reps'],
+            'original_url': exercise_data.get('url', ''),
+            'qdrant_id': str(uuid.uuid4())
+        }
+        
         # Generate embedding using OpenAI
         client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         response = client.embeddings.create(
             model="text-embedding-ada-002",
-            input=text
+            input=text_chunk
         )
         
         embedding = response.data[0].embedding
         
-        # Generate unique ID
-        point_id = str(uuid.uuid4())
-        
         # Store in Qdrant
         qdrant_client = get_qdrant_client()
         qdrant_client.upsert(
-            collection_name="exercises",
+            collection_name="fitness_video_clips",
             points=[
                 PointStruct(
-                    id=point_id,
+                    id=metadata['qdrant_id'],
                     vector=embedding,
                     payload=metadata
                 )
             ]
         )
         
-        logger.info(f"Stored embedding with ID: {point_id}")
-        return point_id
+        logger.info(f"Stored embedding for {exercise_data['exercise_name']} with ID: {metadata['qdrant_id']}")
+        return metadata['qdrant_id']
         
     except Exception as e:
         logger.error(f"Error storing embedding: {str(e)}")
@@ -121,7 +154,7 @@ async def search_similar_exercises(
         # Search in Qdrant
         qdrant_client = get_qdrant_client()
         search_result = qdrant_client.search(
-            collection_name="exercises",
+            collection_name="fitness_video_clips",
             query_vector=query_embedding,
             limit=limit,
             score_threshold=score_threshold
@@ -155,7 +188,7 @@ async def delete_embedding(point_id: str) -> bool:
     try:
         qdrant_client = get_qdrant_client()
         qdrant_client.delete(
-            collection_name="exercises",
+            collection_name="fitness_video_clips",
             points_selector=[point_id]
         )
         
@@ -175,13 +208,13 @@ async def get_collection_info() -> Dict:
     """
     try:
         qdrant_client = get_qdrant_client()
-        collection_info = qdrant_client.get_collection("exercises")
+        collection_info = qdrant_client.get_collection("fitness_video_clips")
         
         return {
-            'name': collection_info.name,
+            'name': 'fitness_video_clips',
             'vectors_count': collection_info.points_count,
-            'vector_size': collection_info.config.params.vectors.size,
-            'distance': collection_info.config.params.vectors.distance.value
+            'vector_size': 1536,
+            'distance': 'COSINE'
         }
         
     except Exception as e:

@@ -45,6 +45,8 @@ async def init_database():
                 url VARCHAR(500) NOT NULL,
                 exercise_name VARCHAR(200) NOT NULL,
                 video_path VARCHAR(500) NOT NULL,
+                start_time DECIMAL(10,3),
+                end_time DECIMAL(10,3),
                 how_to TEXT,
                 benefits TEXT,
                 counteracts TEXT,
@@ -67,12 +69,14 @@ async def store_exercise(
     url: str,
     exercise_name: str,
     video_path: str,
-    how_to: str,
-    benefits: str,
-    counteracts: str,
-    fitness_level: int,
-    rounds_reps: str,
-    intensity: int,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None,
+    how_to: str = "",
+    benefits: str = "",
+    counteracts: str = "",
+    fitness_level: int = 5,
+    rounds_reps: str = "",
+    intensity: int = 5,
     qdrant_id: Optional[str] = None
 ) -> str:
     """
@@ -100,10 +104,10 @@ async def store_exercise(
         
         await conn.execute("""
             INSERT INTO exercises (
-                id, url, exercise_name, video_path, how_to, benefits, counteracts,
+                id, url, exercise_name, video_path, start_time, end_time, how_to, benefits, counteracts,
                 fitness_level, rounds_reps, intensity, qdrant_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        """, exercise_id, url, exercise_name, video_path, how_to, benefits,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        """, exercise_id, url, exercise_name, video_path, start_time, end_time, how_to, benefits,
              counteracts, fitness_level, rounds_reps, intensity, qdrant_id)
         
         logger.info(f"Stored exercise: {exercise_name} (ID: {exercise_id})")
@@ -152,11 +156,11 @@ async def get_exercise_by_id(exercise_id: str) -> Optional[Dict]:
         return dict(row) if row else None
 
 async def search_exercises(
-    query: str = None,
-    fitness_level_min: int = None,
-    fitness_level_max: int = None,
-    intensity_min: int = None,
-    intensity_max: int = None,
+    query: Optional[str] = None,
+    fitness_level_min: Optional[int] = None,
+    fitness_level_max: Optional[int] = None,
+    intensity_min: Optional[int] = None,
+    intensity_max: Optional[int] = None,
     limit: int = 50
 ) -> List[Dict]:
     """

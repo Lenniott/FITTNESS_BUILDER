@@ -332,8 +332,8 @@ Focus on identifying distinct exercises with clear start/end times. Provide comp
             try:
                 logger.info(f"Processing exercise {i+1}/{len(exercises)}: {exercise['exercise_name']}")
                 
-                # Create clips directory
-                clips_dir = os.path.join(temp_dir, "clips")
+                # Create clips directory in storage
+                clips_dir = os.path.join("storage", "clips")
                 os.makedirs(clips_dir, exist_ok=True)
                 logger.info(f"Created clips directory: {clips_dir}")
                 
@@ -405,25 +405,30 @@ Focus on identifying distinct exercises with clear start/end times. Provide comp
         
         for clip in clips:
             try:
-                # Generate embeddings for vector search
-                exercise_text = f"{clip['exercise_name']} {clip['how_to']} {clip['benefits']} {clip['counteracts']} {clip['rounds_reps']}"
+                # Store in vector database with complete exercise data
+                exercise_data = {
+                    'exercise_name': clip['exercise_name'],
+                    'video_path': clip['clip_path'],
+                    'start_time': clip['start_time'],
+                    'end_time': clip['end_time'],
+                    'how_to': clip['how_to'],
+                    'benefits': clip['benefits'],
+                    'counteracts': clip['counteracts'],
+                    'fitness_level': clip['fitness_level'],
+                    'rounds_reps': clip['rounds_reps'],
+                    'intensity': clip['intensity'],
+                    'url': url
+                }
                 
-                # Store in vector database
-                qdrant_id = await store_embedding(
-                    text=exercise_text,
-                    metadata={
-                        'clip_path': clip['clip_path'],
-                        'fitness_level': clip['fitness_level'],
-                        'intensity': clip['intensity'],
-                        'original_url': url
-                    }
-                )
+                qdrant_id = await store_embedding(exercise_data)
                 
                 # Store in PostgreSQL
                 exercise_id = await store_exercise(
                     url=url,
                     exercise_name=clip['exercise_name'],
                     video_path=clip['clip_path'],
+                    start_time=clip['start_time'],
+                    end_time=clip['end_time'],
                     how_to=clip['how_to'],
                     benefits=clip['benefits'],
                     counteracts=clip['counteracts'],
