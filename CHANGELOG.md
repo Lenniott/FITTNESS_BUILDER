@@ -86,6 +86,7 @@ CREATE TABLE exercises (
 - ✅ **Vector Search**: Qdrant integration for semantic exercise search
 - ✅ **Permanent Storage**: Clips stored in `storage/clips/` with database metadata
 - ✅ **API Endpoints**: Complete REST API with health checks, search, and statistics
+- ✅ **Docker Deployment**: Production-ready containerization with FFmpeg, connects to external PostgreSQL and Qdrant
 
 ### Tested
 - All 13 tests passing (10 unit tests + 3 integration tests)
@@ -96,6 +97,7 @@ CREATE TABLE exercises (
 - **Clip Generation**: Successfully creates 15.1s clip from 5.6s-20.7s timing data
 - **Database Storage**: Exercise stored with complete metadata and timing information
 - **API Endpoints**: All endpoints tested and working correctly
+- **Docker Deployment**: Containerized application running successfully in production
 
 ### Dependencies
 - Added ffmpeg via Homebrew for video processing

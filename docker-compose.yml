@@ -7,74 +7,26 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - PG_HOST=postgres
-      - PG_PORT=5432
-      - PG_DBNAME=fitness_db
-      - PG_USER=fitness_user
-      - PG_PASSWORD=fitness_password
-      - QDRANT_URL=http://qdrant:6333
-      - QDRANT_API_KEY=your-qdrant-api-key
+      - PG_HOST=${PG_HOST}
+      - PG_PORT=${PG_PORT:-5432}
+      - PG_DBNAME=${PG_DBNAME}
+      - PG_USER=${PG_USER}
+      - PG_PASSWORD=${PG_PASSWORD}
+      - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - AI_PROVIDER=gemini
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
+      - AI_PROVIDER=${AI_PROVIDER:-gemini}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - fitness_storage:/app/storage
       - fitness_temp:/app/app/temp
-    depends_on:
-      - postgres
-      - qdrant
-    restart: unless-stopped
-    networks:
-      - fitness_network
-
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_DB=fitness_db
-      - POSTGRES_USER=fitness_user
-      - POSTGRES_PASSWORD=fitness_password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-    networks:
-      - fitness_network
-
-  # Qdrant Vector Database
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    restart: unless-stopped
-    networks:
-      - fitness_network
-
-  # Nginx Reverse Proxy (Optional)
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./ssl:/etc/nginx/ssl
-    depends_on:
-      - fitness-builder
     restart: unless-stopped
     networks:
       - fitness_network
 
 volumes:
-  postgres_data:
-  qdrant_data:
   fitness_storage:
   fitness_temp:
 
