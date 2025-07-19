@@ -67,42 +67,157 @@ class WorkoutCompiler:
             self.openai_client = openai.OpenAI(api_key=api_key)
         return self.openai_client
     
-    async def compile_workout(self, user_requirements: str, target_duration: int, 
-                            format: str, intensity_level: str) -> Dict:
+    async def _determine_workout_parameters(self, user_requirements: str) -> Dict:
+        """Use AI to determine workout parameters from user requirements."""
+        
+        prompt = f"""
+Analyze the user's fitness requirements and determine appropriate workout parameters:
+
+User Requirements: {user_requirements}
+
+Determine the following parameters:
+
+1. **Intensity Level**: 
+   - "beginner" - for people who haven't exercised in months, are new to fitness, or have physical limitations
+   - "intermediate" - for people with some fitness experience, regular exercisers
+   - "advanced" - for people with significant fitness experience, athletes
+
+2. **Target Duration**: 
+   - Estimate based on user's needs and fitness level
+   - Beginner: 180-300 seconds (3-5 minutes)
+   - Intermediate: 300-600 seconds (5-10 minutes)  
+   - Advanced: 600-900 seconds (10-15 minutes)
+
+3. **Format**: 
+   - Default to "vertical" for mobile phone viewing
+   - Only use "square" if specifically requested
+
+Return a JSON response like:
+{{
+  "intensity_level": "beginner",
+  "target_duration": 300,
+  "format": "vertical"
+}}
+
+Consider the user's language carefully:
+- Words like "beginner", "first time", "haven't exercised", "slowly" → beginner
+- Words like "intermediate", "some experience", "regular" → intermediate  
+- Words like "advanced", "athlete", "experienced" → advanced
+- Duration hints like "quick", "short" → shorter duration
+- Duration hints like "comprehensive", "thorough" → longer duration
+"""
+        
+        try:
+            # Call Gemini with text input
+            try:
+                gemini_model = self._get_gemini_model(use_backup=False)
+                response = gemini_model.generate_content(prompt)
+                logger.info("Successfully used primary Gemini API key for parameter determination")
+            except Exception as primary_error:
+                logger.warning(f"Primary Gemini API failed: {str(primary_error)}")
+                logger.info("Attempting to use backup Gemini API key...")
+                
+                # Try backup key
+                gemini_model = self._get_gemini_model(use_backup=True)
+                response = gemini_model.generate_content(prompt)
+                logger.info("Successfully used backup Gemini API key for parameter determination")
+            
+            # Parse JSON response
+            response_text = response.text.strip()
+            logger.info(f"Parameter determination response: {response_text[:200]}...")
+            
+            # Extract JSON
+            json_text = response_text
+            if "```json" in response_text:
+                json_text = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text:
+                json_text = response_text.split("```")[1]
+            
+            # Parse JSON
+            json_text = json_text.strip()
+            if json_text.startswith('{') and json_text.endswith('}'):
+                try:
+                    params = json.loads(json_text)
+                    logger.info(f"Successfully parsed workout parameters: {params}")
+                    return params
+                except json.JSONDecodeError as json_error:
+                    logger.error(f"JSON parsing error: {json_error}")
+                    return self._fallback_workout_parameters(user_requirements)
+            else:
+                logger.error("No valid JSON found in parameter determination response")
+                return self._fallback_workout_parameters(user_requirements)
+            
+        except Exception as e:
+            logger.error(f"Error determining workout parameters: {str(e)}")
+            return self._fallback_workout_parameters(user_requirements)
+    
+    def _fallback_workout_parameters(self, user_requirements: str) -> Dict:
+        """Fallback workout parameters when AI fails."""
+        requirements_lower = user_requirements.lower()
+        
+        # Determine intensity level
+        if any(word in requirements_lower for word in ['beginner', 'first time', 'haven\'t exercised', 'slowly', 'new']):
+            intensity_level = "beginner"
+            target_duration = 300  # 5 minutes
+        elif any(word in requirements_lower for word in ['advanced', 'athlete', 'experienced']):
+            intensity_level = "advanced"
+            target_duration = 600  # 10 minutes
+        else:
+            intensity_level = "intermediate"
+            target_duration = 450  # 7.5 minutes
+        
+        # Default to vertical format for mobile
+        format = "vertical"
+        
+        return {
+            "intensity_level": intensity_level,
+            "target_duration": target_duration,
+            "format": format
+        }
+    
+    async def compile_workout(self, user_requirements: str) -> Dict:
         """
         Complete workflow:
-        1. Generate requirement stories from user input
-        2. Search for relevant video clips
-        3. Generate exercise scripts
-        4. Compile video with overlays
-        5. Store result
+        1. Determine workout parameters from user requirements
+        2. Generate requirement stories from user input
+        3. Search for relevant video clips
+        4. Generate exercise scripts
+        5. Compile video with overlays
+        6. Store result
         """
         start_time = time.time()
         
         try:
-            # Step 1: Generate requirement stories
+            # Step 1: Determine workout parameters from user requirements
+            logger.info("Determining workout parameters...")
+            workout_params = await self._determine_workout_parameters(user_requirements)
+            target_duration = workout_params['target_duration']
+            intensity_level = workout_params['intensity_level']
+            format = workout_params['format']
+            
+            # Step 2: Generate requirement stories
             logger.info("Generating requirement stories...")
             requirement_stories = await self._generate_requirement_stories(
                 user_requirements, target_duration, intensity_level
             )
             
-            # Step 2: Search for relevant clips
+            # Step 3: Search for relevant clips
             logger.info("Searching for relevant video clips...")
             relevant_clips = await self._search_relevant_clips(
                 requirement_stories, target_duration, intensity_level
             )
             
-            # Step 3: Generate exercise scripts
+            # Step 4: Generate exercise scripts
             logger.info("Generating exercise scripts...")
             clips_with_scripts = await self._generate_exercise_scripts(relevant_clips)
             
-            # Step 4: Compile video
+            # Step 5: Compile video
             logger.info("Compiling workout video...")
             video_path = await self._compile_video(
                 clips_with_scripts, target_duration, format
             )
             
-            # Step 5: Store result
+            # Step 6: Store result
             workout_id = await store_compiled_workout(
                 user_requirements=user_requirements,
                 target_duration=target_duration,
@@ -368,8 +483,14 @@ Format as clear, actionable instructions.
         
         with open(temp_list_file, 'w') as f:
             for clip in clips:
+                # Fix video path to use relative path from project root
+                video_path = clip['video_path']
+                if video_path.startswith('/tmp/'):
+                    # Remove /tmp/ prefix and use relative path
+                    video_path = video_path.replace('/tmp/', '')
+                
                 # Add clip with duration info
-                f.write(f"file '{clip['video_path']}'\n")
+                f.write(f"file '{video_path}'\n")
                 f.write(f"inpoint {clip['start_time']}\n")
                 f.write(f"outpoint {clip['end_time']}\n")
         

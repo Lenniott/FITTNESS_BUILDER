@@ -22,9 +22,6 @@ router = APIRouter()
 # Pydantic models for request/response
 class WorkoutRequest(BaseModel):
     user_requirements: str
-    target_duration: int = 300  # 5 minutes default
-    format: str = "square"  # "square" or "vertical"
-    intensity_level: str = "beginner"  # "beginner", "intermediate", "advanced"
 
 class WorkoutResponse(BaseModel):
     id: str
@@ -67,21 +64,9 @@ async def generate_workout(request: WorkoutRequest, background_tasks: Background
         if not request.user_requirements.strip():
             raise HTTPException(status_code=400, detail="User requirements cannot be empty")
         
-        if request.target_duration < 60 or request.target_duration > 1800:  # 1-30 minutes
-            raise HTTPException(status_code=400, detail="Target duration must be between 1 and 30 minutes")
-        
-        if request.format not in ["square", "vertical"]:
-            raise HTTPException(status_code=400, detail="Format must be 'square' or 'vertical'")
-        
-        if request.intensity_level not in ["beginner", "intermediate", "advanced"]:
-            raise HTTPException(status_code=400, detail="Intensity level must be 'beginner', 'intermediate', or 'advanced'")
-        
-        # Process workout compilation
+        # Process workout compilation with AI-determined parameters
         result = await workout_compiler.compile_workout(
-            user_requirements=request.user_requirements,
-            target_duration=request.target_duration,
-            format=request.format,
-            intensity_level=request.intensity_level
+            user_requirements=request.user_requirements
         )
         
         if result["success"]:
