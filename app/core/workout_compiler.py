@@ -483,11 +483,17 @@ Format as clear, actionable instructions.
         
         with open(temp_list_file, 'w') as f:
             for clip in clips:
-                # Fix video path to use relative path from project root
+                # Fix video path to use correct relative path
                 video_path = clip['video_path']
                 if video_path.startswith('/tmp/'):
-                    # Remove /tmp/ prefix and use relative path
+                    # Remove /tmp/ prefix and use relative path from project root
                     video_path = video_path.replace('/tmp/', '')
+                elif video_path.startswith('storage/'):
+                    # Already correct relative path
+                    pass
+                else:
+                    # Assume it's a relative path from project root
+                    pass
                 
                 # Add clip with duration info
                 f.write(f"file '{video_path}'\n")
