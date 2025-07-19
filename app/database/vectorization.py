@@ -8,7 +8,7 @@ import os
 import uuid
 from typing import Dict, List, Optional
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, PointIdsList
 import openai
 from dotenv import load_dotenv
 
@@ -198,6 +198,83 @@ async def delete_embedding(point_id: str) -> bool:
     except Exception as e:
         logger.error(f"Error deleting embedding: {str(e)}")
         return False
+
+async def delete_embeddings_by_url(url: str) -> int:
+    """
+    Delete all embeddings for a specific URL.
+    
+    Args:
+        url: Video URL to delete embeddings for
+        
+    Returns:
+        Number of embeddings deleted
+    """
+    try:
+        qdrant_client = get_qdrant_client()
+        
+        # Search for points with matching URL
+        scroll_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="original_url",
+                    match=MatchValue(value=url)
+                )
+            ]
+        )
+        
+        search_result = qdrant_client.scroll(
+            collection_name="fitness_video_clips",
+            scroll_filter=scroll_filter,
+            limit=1000
+        )
+        
+        if search_result[0]:
+            point_ids = [point.id for point in search_result[0]]
+            if point_ids:
+                qdrant_client.delete(
+                    collection_name="fitness_video_clips",
+                    points_selector=PointIdsList(points=point_ids)
+                )
+                logger.info(f"Deleted {len(point_ids)} embeddings for URL: {url}")
+                return len(point_ids)
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f"Error deleting embeddings for URL {url}: {str(e)}")
+        return 0
+
+async def delete_all_embeddings() -> int:
+    """
+    Delete ALL embeddings from Qdrant.
+    
+    Returns:
+        Number of embeddings deleted
+    """
+    try:
+        qdrant_client = get_qdrant_client()
+        
+        # Get all points
+        search_result = qdrant_client.scroll(
+            collection_name="fitness_video_clips",
+            limit=10000
+        )
+        
+        if search_result[0]:
+            point_ids = [point.id for point in search_result[0]]
+            if point_ids:
+                qdrant_client.delete(
+                    collection_name="fitness_video_clips",
+                    points_selector=PointIdsList(points=point_ids)
+                )
+                logger.info(f"Deleted {len(point_ids)} embeddings from vector store")
+                return len(point_ids)
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f"Error deleting all embeddings: {str(e)}")
+        return 0
 
 async def get_collection_info() -> Dict:
     """

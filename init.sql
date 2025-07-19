@@ -5,6 +5,8 @@
 CREATE TABLE IF NOT EXISTS exercises (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     url VARCHAR(500) NOT NULL,
+    normalized_url VARCHAR(500) NOT NULL,
+    carousel_index INTEGER DEFAULT 1,
     exercise_name VARCHAR(200) NOT NULL,
     video_path VARCHAR(500) NOT NULL,
     start_time DECIMAL(10,3),
@@ -21,6 +23,13 @@ CREATE TABLE IF NOT EXISTS exercises (
 
 -- Create index on url for faster lookups
 CREATE INDEX IF NOT EXISTS idx_exercises_url ON exercises(url);
+
+-- Create index on normalized_url and carousel_index for duplicate prevention
+CREATE INDEX IF NOT EXISTS idx_exercises_normalized_url ON exercises(normalized_url);
+CREATE INDEX IF NOT EXISTS idx_exercises_carousel_index ON exercises(carousel_index);
+
+-- Create unique constraint to prevent duplicate processing
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_unique_url_index ON exercises(normalized_url, carousel_index);
 
 -- Create index on fitness_level and intensity for filtering
 CREATE INDEX IF NOT EXISTS idx_exercises_fitness_level ON exercises(fitness_level);

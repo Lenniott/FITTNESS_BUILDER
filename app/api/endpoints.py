@@ -187,6 +187,76 @@ async def get_similar_exercises(exercise_id: str, limit: int = Query(10, ge=1, l
         logger.error(f"Error getting similar exercises: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get similar exercises: {str(e)}")
 
+@router.delete("/exercises/all")
+async def delete_all_exercises():
+    """Delete ALL exercises, clips, and vector embeddings."""
+    try:
+        from app.database.operations import delete_all_exercises as db_delete_all
+        from app.database.vectorization import delete_all_embeddings
+        
+        # Delete from database
+        deleted_count = await db_delete_all()
+        
+        # Delete from vector store
+        vector_deleted = await delete_all_embeddings()
+        
+        # Delete all clip files
+        clips_deleted = 0
+        clips_dir = Path("storage/clips")
+        if clips_dir.exists():
+            for clip_file in clips_dir.glob("*.mp4"):
+                try:
+                    clip_file.unlink()
+                    clips_deleted += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete clip file {clip_file}: {str(e)}")
+        
+        return {
+            "message": "All exercises deleted successfully",
+            "database_deleted": deleted_count,
+            "vector_deleted": vector_deleted,
+            "clips_deleted": clips_deleted
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting all exercises: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete all exercises: {str(e)}")
+
+@router.delete("/exercises/url/{url:path}")
+async def delete_exercises_by_url(url: str):
+    """Delete all exercises and clips for a specific URL."""
+    try:
+        from app.database.operations import delete_exercises_by_url as db_delete_by_url
+        from app.database.vectorization import delete_embeddings_by_url
+        
+        # Delete from database
+        deleted_count = await db_delete_by_url(url)
+        
+        # Delete from vector store
+        vector_deleted = await delete_embeddings_by_url(url)
+        
+        # Delete clip files
+        clips_deleted = 0
+        exercises = await get_exercises_by_url(url)
+        for exercise in exercises:
+            if exercise.get('video_path') and os.path.exists(exercise['video_path']):
+                try:
+                    os.remove(exercise['video_path'])
+                    clips_deleted += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete clip file {exercise['video_path']}: {str(e)}")
+        
+        return {
+            "message": "Exercises deleted successfully",
+            "database_deleted": deleted_count,
+            "vector_deleted": vector_deleted,
+            "clips_deleted": clips_deleted
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting exercises for URL {url}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete exercises: {str(e)}")
+
 @router.delete("/exercises/{exercise_id}")
 async def delete_exercise_endpoint(exercise_id: str):
     """Delete exercise by ID."""

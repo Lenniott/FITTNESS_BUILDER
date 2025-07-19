@@ -32,6 +32,8 @@ All notable changes to this project will be documented in this file.
 - `POST /api/v1/exercises/search` - Search exercises with filters
 - `GET /api/v1/exercises/similar/{id}` - Find similar exercises
 - `DELETE /api/v1/exercises/{id}` - Delete exercise
+- `DELETE /api/v1/exercises/all` - Delete ALL exercises, clips, and vector embeddings
+- `DELETE /api/v1/exercises/url/{url}` - Delete all exercises and clips for a specific URL
 - `GET /api/v1/health/database` - Database health check
 - `GET /api/v1/health/vector` - Vector database health check
 - `GET /api/v1/stats` - Processing statistics
@@ -87,6 +89,8 @@ CREATE TABLE exercises (
 - ✅ **Permanent Storage**: Clips stored in `storage/clips/` with database metadata
 - ✅ **API Endpoints**: Complete REST API with health checks, search, and statistics
 - ✅ **Docker Deployment**: Production-ready containerization with FFmpeg, connects to external PostgreSQL and Qdrant
+- ✅ **Carousel Support**: Automatic processing of Instagram carousel items with duplicate prevention
+- ✅ **Data Cleanup**: Comprehensive delete endpoints for database, vector store, and file cleanup
 
 ### Tested
 - All 13 tests passing (10 unit tests + 3 integration tests)
@@ -98,6 +102,7 @@ CREATE TABLE exercises (
 - **Database Storage**: Exercise stored with complete metadata and timing information
 - **API Endpoints**: All endpoints tested and working correctly
 - **Docker Deployment**: Containerized application running successfully in production
+- **Carousel Processing**: Instagram carousel detection and multi-item processing
 
 ### Dependencies
 - Added ffmpeg via Homebrew for video processing

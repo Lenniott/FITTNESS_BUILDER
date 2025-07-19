@@ -20,13 +20,14 @@ import cv2
 import ffmpeg
 import numpy as np
 from openai import OpenAI
-import google.generativeai as genai
+import google.generativeai as genai  # type: ignore
 import subprocess
 
 from app.services.downloaders import download_media_and_metadata
 from app.services.transcription import transcribe_audio
-from app.database.operations import store_exercise, get_database_connection
+from app.database.operations import store_exercise, get_database_connection, check_existing_processing
 from app.database.vectorization import store_embedding
+from app.utils.url_processor import extract_carousel_info, detect_carousel_items
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,12 @@ class VideoProcessor:
             if not api_key:
                 raise ValueError("GEMINI_API_KEY environment variable not set")
             genai.configure(api_key=api_key)
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+            self.gemini_model = genai.GenerativeModel('models/gemini-2.5-flash-lite-preview-06-17')
         return self.gemini_model
         
     async def process_video(self, url: str) -> Dict:
         """
-        Complete video processing pipeline.
+        Complete video processing pipeline with carousel support.
         
         Args:
             url: Video URL to process
@@ -71,58 +72,59 @@ class VideoProcessor:
         temp_dir = None
         
         try:
+            # Extract carousel information
+            normalized_url, carousel_index = extract_carousel_info(url)
+            logger.info(f"Processing URL: {url} -> normalized: {normalized_url}, carousel_index: {carousel_index}")
+            
+            # For carousels, we need to download first to know how many items exist
+            # For single videos, we can check immediately
+            if 'instagram.com' in url and '/p/' in url:
+                # This might be a carousel - download first to check
+                logger.info(f"Potential carousel detected, downloading to check item count")
+            else:
+                # Single video - check if already processed
+                existing_exercise = await check_existing_processing(normalized_url, carousel_index)
+                if existing_exercise:
+                    logger.info(f"URL already processed: {normalized_url} (index: {carousel_index})")
+                    return {
+                        "success": True,
+                        "processed_clips": [{
+                            'exercise_id': existing_exercise['id'],
+                            'exercise_name': existing_exercise['exercise_name'],
+                            'video_path': existing_exercise['video_path'],
+                            'segments_count': 1,
+                            'total_duration': existing_exercise['end_time'] - existing_exercise['start_time'] if existing_exercise['end_time'] and existing_exercise['start_time'] else 0,
+                            'segments': [{
+                                'start_time': existing_exercise['start_time'],
+                                'end_time': existing_exercise['end_time']
+                            }] if existing_exercise['start_time'] and existing_exercise['end_time'] else []
+                        }],
+                        "total_clips": 1,
+                        "processing_time": 0,
+                        "temp_dir": None,
+                        "already_processed": True
+                    }
+            
             # Step 1: Download video and extract metadata
             logger.info(f"Starting video processing for: {url}")
             download_result = await download_media_and_metadata(url)
             temp_dir = download_result['temp_dir']
-            video_file = download_result['files'][0] if download_result['files'] else None
             
-            if not video_file:
-                raise ValueError("No video file downloaded")
+            # Check if this is a carousel with multiple files
+            is_carousel = download_result.get('is_carousel', False)
+            carousel_count = download_result.get('carousel_count', 1)
             
-            # Step 2: Transcribe audio
-            logger.info("Transcribing audio...")
-            transcript = await transcribe_audio(video_file)
-            
-            # Save transcript to temp directory for debugging
-            transcript_file = os.path.join(temp_dir, "transcript.json")
-            with open(transcript_file, 'w') as f:
-                json.dump(transcript, f, indent=2)
-            logger.info(f"Saved transcript to: {transcript_file}")
-            
-            # Step 3: Extract keyframes
-            logger.info("Extracting keyframes...")
-            frames_dir = os.path.join(temp_dir, "frames")
-            os.makedirs(frames_dir, exist_ok=True)
-            frame_files = await self._extract_keyframes(video_file, frames_dir)
-            
-            # Step 4: AI exercise detection
-            logger.info("Detecting exercises with AI...")
-            exercises = await self._detect_exercises(
-                video_file=video_file,
-                transcript=transcript,
-                frames=frame_files,
-                metadata=download_result,
-                temp_dir=temp_dir
-            )
-            
-            # Step 5: Generate clips
-            logger.info("Generating exercise clips...")
-            clips = await self._generate_clips(video_file, exercises, temp_dir)
-            
-            # Step 6: Store in database
-            logger.info("Storing exercises in database...")
-            stored_exercises = await self._store_exercises(url, clips)
-            
-            processing_time = time.time() - start_time
-            
-            return {
-                "success": True,
-                "processed_clips": stored_exercises,
-                "total_clips": len(stored_exercises),
-                "processing_time": processing_time,
-                "temp_dir": temp_dir
-            }
+            if is_carousel and carousel_count > 1:
+                logger.info(f"Detected carousel with {carousel_count} items")
+                return await self._process_carousel(url, normalized_url, download_result, temp_dir, start_time)
+            else:
+                # Single video processing
+                video_file = download_result['files'][0] if download_result['files'] else None
+                
+                if not video_file:
+                    raise ValueError("No video file downloaded")
+                
+                return await self._process_single_video(url, normalized_url, carousel_index, video_file, download_result, temp_dir, start_time)
             
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}")
@@ -270,8 +272,12 @@ Focus on identifying distinct exercises with clear start/end times. Provide comp
                     logger.error(f"Problematic JSON: {json_text}")
                     # Try to fix common JSON issues
                     try:
-                        # Remove any trailing commas
+                        # Remove any trailing commas and comments
                         json_text = json_text.replace(',}', '}').replace(',]', ']')
+                        # Remove JavaScript-style comments
+                        import re
+                        json_text = re.sub(r'//.*$', '', json_text, flags=re.MULTILINE)
+                        json_text = re.sub(r'/\*.*?\*/', '', json_text, flags=re.DOTALL)
                         exercises_data = json.loads(json_text)
                         exercises = exercises_data.get('exercises', [])
                         logger.info(f"Fixed JSON parsing, found {len(exercises)} exercises")
@@ -399,7 +405,7 @@ Focus on identifying distinct exercises with clear start/end times. Provide comp
         logger.info(f"Clip generation complete. Generated {len(clips)} clips out of {len(exercises)} exercises")
         return clips
     
-    async def _store_exercises(self, url: str, clips: List[Dict]) -> List[Dict]:
+    async def _store_exercises(self, url: str, normalized_url: str, carousel_index: int, clips: List[Dict]) -> List[Dict]:
         """Store exercises in database and vector store."""
         stored_exercises = []
         
@@ -425,6 +431,8 @@ Focus on identifying distinct exercises with clear start/end times. Provide comp
                 # Store in PostgreSQL
                 exercise_id = await store_exercise(
                     url=url,
+                    normalized_url=normalized_url,
+                    carousel_index=carousel_index,
                     exercise_name=clip['exercise_name'],
                     video_path=clip['clip_path'],
                     start_time=clip['start_time'],
@@ -452,6 +460,138 @@ Focus on identifying distinct exercises with clear start/end times. Provide comp
                 continue
         
         return stored_exercises
+    
+    async def _process_single_video(self, url: str, normalized_url: str, carousel_index: int, 
+                                   video_file: str, download_result: Dict, temp_dir: str, start_time: float) -> Dict:
+        """Process a single video file."""
+        # Step 2: Transcribe audio
+        logger.info("Transcribing audio...")
+        transcript = await transcribe_audio(video_file)
+        
+        # Save transcript to temp directory for debugging
+        transcript_file = os.path.join(temp_dir, "transcript.json")
+        with open(transcript_file, 'w') as f:
+            json.dump(transcript, f, indent=2)
+        logger.info(f"Saved transcript to: {transcript_file}")
+        
+        # Step 3: Extract keyframes
+        logger.info("Extracting keyframes...")
+        frames_dir = os.path.join(temp_dir, "frames")
+        os.makedirs(frames_dir, exist_ok=True)
+        frame_files = await self._extract_keyframes(video_file, frames_dir)
+        
+        # Step 4: AI exercise detection
+        logger.info("Detecting exercises with AI...")
+        exercises = await self._detect_exercises(
+            video_file=video_file,
+            transcript=transcript,
+            frames=frame_files,
+            metadata=download_result,
+            temp_dir=temp_dir
+        )
+        
+        # Step 5: Generate clips
+        logger.info("Generating exercise clips...")
+        clips = await self._generate_clips(video_file, exercises, temp_dir)
+        
+        # Step 6: Store in database
+        logger.info("Storing exercises in database...")
+        stored_exercises = await self._store_exercises(url, normalized_url, carousel_index, clips)
+        
+        processing_time = time.time() - start_time
+        
+        return {
+            "success": True,
+            "processed_clips": stored_exercises,
+            "total_clips": len(stored_exercises),
+            "processing_time": processing_time,
+            "temp_dir": temp_dir
+        }
+    
+    async def _process_carousel(self, url: str, normalized_url: str, download_result: Dict, 
+                               temp_dir: str, start_time: float) -> Dict:
+        """Process all items in a carousel."""
+        all_clips = []
+        total_processing_time = 0
+        carousel_count = len(download_result['files'])
+        
+        # Check if ALL carousel items are already processed
+        all_processed = True
+        existing_items = []
+        
+        for i in range(carousel_count):
+            carousel_index = i + 1
+            existing_exercise = await check_existing_processing(normalized_url, carousel_index)
+            if existing_exercise:
+                existing_items.append({
+                    'exercise_id': existing_exercise['id'],
+                    'exercise_name': existing_exercise['exercise_name'],
+                    'video_path': existing_exercise['video_path'],
+                    'segments_count': 1,
+                    'total_duration': existing_exercise['end_time'] - existing_exercise['start_time'] if existing_exercise['end_time'] and existing_exercise['start_time'] else 0,
+                    'segments': [{
+                        'start_time': existing_exercise['start_time'],
+                        'end_time': existing_exercise['end_time']
+                    }] if existing_exercise['start_time'] and existing_exercise['end_time'] else [],
+                    'carousel_index': carousel_index
+                })
+            else:
+                all_processed = False
+        
+        # If all items are processed, return them
+        if all_processed and existing_items:
+            logger.info(f"All {carousel_count} carousel items already processed")
+            return {
+                "success": True,
+                "processed_clips": existing_items,
+                "total_clips": len(existing_items),
+                "processing_time": 0,
+                "temp_dir": None,
+                "carousel_processed": True,
+                "already_processed": True
+            }
+        
+        # Process items that haven't been processed yet
+        for i, video_file in enumerate(download_result['files']):
+            carousel_index = i + 1
+            logger.info(f"Processing carousel item {carousel_index}/{carousel_count}")
+            
+            # Check if this carousel item is already processed
+            existing_exercise = await check_existing_processing(normalized_url, carousel_index)
+            if existing_exercise:
+                logger.info(f"Carousel item {carousel_index} already processed")
+                all_clips.append({
+                    'exercise_id': existing_exercise['id'],
+                    'exercise_name': existing_exercise['exercise_name'],
+                    'video_path': existing_exercise['video_path'],
+                    'segments_count': 1,
+                    'total_duration': existing_exercise['end_time'] - existing_exercise['start_time'] if existing_exercise['end_time'] and existing_exercise['start_time'] else 0,
+                    'segments': [{
+                        'start_time': existing_exercise['start_time'],
+                        'end_time': existing_exercise['end_time']
+                    }] if existing_exercise['start_time'] and existing_exercise['end_time'] else [],
+                    'carousel_index': carousel_index
+                })
+                continue
+            
+            try:
+                # Process this carousel item
+                item_result = await self._process_single_video(url, normalized_url, carousel_index, video_file, download_result, temp_dir, start_time)
+                all_clips.extend(item_result['processed_clips'])
+                total_processing_time += item_result['processing_time']
+                
+            except Exception as e:
+                logger.error(f"Error processing carousel item {carousel_index}: {str(e)}")
+                continue
+        
+        return {
+            "success": True,
+            "processed_clips": all_clips,
+            "total_clips": len(all_clips),
+            "processing_time": total_processing_time,
+            "temp_dir": temp_dir,
+            "carousel_processed": True
+        }
     
     async def _cleanup_temp_files(self, temp_dir: str):
         """Clean up temporary files."""

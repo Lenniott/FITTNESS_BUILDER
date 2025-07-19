@@ -43,6 +43,8 @@ async def init_database():
             CREATE TABLE IF NOT EXISTS exercises (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 url VARCHAR(500) NOT NULL,
+                normalized_url VARCHAR(500) NOT NULL,
+                carousel_index INTEGER DEFAULT 1,
                 exercise_name VARCHAR(200) NOT NULL,
                 video_path VARCHAR(500) NOT NULL,
                 start_time DECIMAL(10,3),
@@ -58,17 +60,33 @@ async def init_database():
             )
         """)
         
-        # Create index on url for faster lookups
+        # Create indexes
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_exercises_url ON exercises(url)
+        """)
+        
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exercises_normalized_url ON exercises(normalized_url)
+        """)
+        
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exercises_carousel_index ON exercises(carousel_index)
+        """)
+        
+        # Create unique constraint to prevent duplicate processing
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_unique_url_index 
+            ON exercises(normalized_url, carousel_index)
         """)
         
         logger.info("Database tables initialized")
 
 async def store_exercise(
     url: str,
-    exercise_name: str,
-    video_path: str,
+    normalized_url: str,
+    carousel_index: int = 1,
+    exercise_name: str = "",
+    video_path: str = "",
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
     how_to: str = "",
@@ -104,14 +122,35 @@ async def store_exercise(
         
         await conn.execute("""
             INSERT INTO exercises (
-                id, url, exercise_name, video_path, start_time, end_time, how_to, benefits, counteracts,
-                fitness_level, rounds_reps, intensity, qdrant_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        """, exercise_id, url, exercise_name, video_path, start_time, end_time, how_to, benefits,
-             counteracts, fitness_level, rounds_reps, intensity, qdrant_id)
+                id, url, normalized_url, carousel_index, exercise_name, video_path, start_time, end_time, 
+                how_to, benefits, counteracts, fitness_level, rounds_reps, intensity, qdrant_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        """, exercise_id, url, normalized_url, carousel_index, exercise_name, video_path, start_time, end_time, 
+             how_to, benefits, counteracts, fitness_level, rounds_reps, intensity, qdrant_id)
         
         logger.info(f"Stored exercise: {exercise_name} (ID: {exercise_id})")
         return exercise_id
+
+async def check_existing_processing(normalized_url: str, carousel_index: int = 1) -> Optional[Dict]:
+    """
+    Check if a URL + carousel_index combination has already been processed.
+    
+    Args:
+        normalized_url: Normalized URL (without query parameters)
+        carousel_index: Index of carousel item (default 1 for single videos)
+        
+    Returns:
+        Existing exercise record or None if not found
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT * FROM exercises 
+            WHERE normalized_url = $1 AND carousel_index = $2
+        """, normalized_url, carousel_index)
+        
+        return dict(row) if row else None
 
 async def get_exercises_by_url(url: str) -> List[Dict]:
     """
@@ -246,6 +285,47 @@ async def delete_exercise(exercise_id: str) -> bool:
         """, exercise_id)
         
         return result == "DELETE 1"
+
+async def delete_exercises_by_url(url: str) -> int:
+    """
+    Delete all exercises for a specific URL.
+    
+    Args:
+        url: Video URL to delete
+        
+    Returns:
+        Number of exercises deleted
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            DELETE FROM exercises WHERE url = $1
+        """, url)
+        
+        # Extract count from result string like "DELETE 5"
+        deleted_count = int(result.split()[1]) if result.startswith("DELETE") else 0
+        logger.info(f"Deleted {deleted_count} exercises for URL: {url}")
+        return deleted_count
+
+async def delete_all_exercises() -> int:
+    """
+    Delete ALL exercises from the database.
+    
+    Returns:
+        Number of exercises deleted
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            DELETE FROM exercises
+        """)
+        
+        # Extract count from result string like "DELETE 5"
+        deleted_count = int(result.split()[1]) if result.startswith("DELETE") else 0
+        logger.info(f"Deleted {deleted_count} exercises from database")
+        return deleted_count
 
 async def close_database():
     """Close database connection pool."""
