@@ -342,3 +342,7 @@ CREATE TABLE compiled_workouts (
   - Uses improved AI prompt with explicit rules for non-overlapping, non-duplicate, and complete movement detection
 - **Robustness**: The pipeline is now robust against duplicate, overlapping, or fragmented exercise detection
 - **Instagram Carousel Handling**: All videos are downloaded once, and each is processed individually. The system is robust for both single-cut and multi-cut videos, and for carousels with intro/hook videos.
+
+### Fixed
+- Robust handling of string/invalid `start_time` and `end_time` in exercise clip generation (`app/core/processor.py`).
+- The pipeline now skips and logs exercises with invalid or non-numeric times, preventing crashes from AI output.

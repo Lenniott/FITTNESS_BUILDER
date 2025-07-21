@@ -36,6 +36,21 @@ from app.utils.enhanced_keyframe_extraction import enhanced_keyframe_extractor
 
 logger = logging.getLogger(__name__)
 
+"""
+NOTE: This file implements the core video processing pipeline for extracting exercise clips from fitness videos. It:
+- Downloads the video and metadata
+- Transcribes audio if present
+- Extracts all keyframes from the video
+- Builds a prompt with all frames, transcript, description, tags, and duration
+- Sends all frames and context to an LLM (Gemini) to detect exercises
+- Receives a JSON response with exercise segments (name, start/end, how-to, etc.)
+- Generates video clips for each exercise segment
+- Saves clips to storage and records metadata in the database and vector store
+- Handles carousels (multi-video posts) and edge cases (music-only, intros, etc.)
+- Cleans up temp files after processing
+Inputs: video URL. Outputs: processed exercise clips, metadata, and database records.
+"""
+
 class VideoProcessor:
     """Main video processing pipeline for exercise detection and clip generation."""
     
@@ -174,6 +189,18 @@ This is video {i+1} of {carousel_count} in an Instagram carousel.
                     total_carousel_items=download_result.get('carousel_count', 1)
                 )
                 
+                # After AI/LLM response, ensure all start_time and end_time are floats
+                for ex in exercises:
+                    try:
+                        ex['start_time'] = float(ex['start_time'])
+                        ex['end_time'] = float(ex['end_time'])
+                    except Exception as e:
+                        logger.warning(f"Skipping exercise with non-numeric times: {ex} ({e})")
+                        ex['start_time'] = -1
+                        ex['end_time'] = -1
+                # Remove any exercises with invalid times
+                exercises = [ex for ex in exercises if ex['start_time'] != -1 and ex['end_time'] != -1]
+                
                 # Step 5: Generate clips for this video
                 logger.info(f"Generating exercise clips for {os.path.basename(video_file)}...")
                 clips = await self._generate_clips(video_file, exercises, temp_dir)
@@ -268,7 +295,7 @@ This is video {i+1} of {carousel_count} in an Instagram carousel.
             logger.warning("No frames to process!")
             return []
         
-        for frame_path in available_frames:
+        for idx, frame_path in enumerate(available_frames):
             # Just read the original frame file and send it to LLM
             with open(frame_path, 'rb') as f:
                 frame_data.append({
@@ -278,19 +305,18 @@ This is video {i+1} of {carousel_count} in an Instagram carousel.
             
             # Extract frame information for explanation using simplified naming convention
             filename = os.path.basename(frame_path)
-            # New format: cut_X_start_time_Y_end_time_Z.jpg
+            # Format: cut_{cutNumber}_frame_{frameNumber}_time_{timestamp_ms}_diff_{diffScore}.jpg
             parts = filename.replace('.jpg', '').split('_')
-            
-            if len(parts) >= 6:  # cut_X_start_time_Y_end_time_Z
+            try:
                 cut_number = parts[1]
-                start_time_ms = int(parts[3])
-                end_time_ms = int(parts[5])
-                start_time_seconds = start_time_ms / 1000.0
-                end_time_seconds = end_time_ms / 1000.0
-                
-                # Explain what each component means
-                frame_explanation = f"Cut {cut_number}: {start_time_seconds:.3f}s to {end_time_seconds:.3f}s"
+                timestamp_ms = int(parts[5])
+                timestamp_seconds = timestamp_ms / 1000.0
+                frame_explanation = (
+                    f"{idx+1}. Cut {cut_number}, Time {timestamp_seconds:.3f}s"
+                )
                 frame_explanations.append(frame_explanation)
+            except Exception as e:
+                logger.warning(f"Could not parse frame filename: {filename} ({e})")
         
         # Create simplified cut start/end time information
         cut_start_end_time = "\n".join(frame_explanations) if frame_explanations else "No cuts available"
@@ -331,7 +357,7 @@ Use the following process step-by-step:
 ---
 
 **STEP 1: Frame Cut Analysis**
-Read each named cut (e.g., Cut 3: 14.000-18.000s) and answer:
+Read each named cut (e.g., ) and answer:
 - Does it depict a *full single exercise* or *a sequence (flow)*?
 - Is there enough visible movement (minimum 3.5s) to identify an exercise?
 - Is it a demonstration (incomplete/mid-rep), a transition, or a useful tutorial segment?
@@ -352,16 +378,16 @@ Read each named cut (e.g., Cut 3: 14.000-18.000s) and answer:
 
 **STEP 2: Timestamp Anchoring**
 For valid frames:
-- Align start and end times with the actual timestamps from frame labeling (e.g., start_time = 14.0 if frame = "cut_3_start_time_14000_end_time_18000.jpg").
+- Align start and end times with the actual timestamps from frame labeling (e.g., start_time = 14.0 if frame = "cut_3_frame_123_time_14000_diff_7.jpg").
 
 ---
 
 **STEP 3: Build JSON Output**
 For each exercise, you must provide a clear, actionable recommendation for `rounds_reps`:
-- If the video does not specify, use your expertise to recommend a typical rep/round scheme for this movement, as a fitness instructor would (e.g., "Perform 8-12 reps per side", "Complete 3 rounds of 30 seconds each", or "Repeat for 45 seconds with good form").
+- If the video does not specify, use your expertise to recommend a typical rep/round scheme for this movement, as a fitness instructor would (e.g., "Perform 10-12 controlled reps per side, resting 30 seconds between sets." or "Complete 3 rounds of 45 seconds each, focusing on form.").
 - Never leave this field vague or empty—always provide a clear, actionable recommendation.
 
-Provide final results in this format:
+Provide final results in this format (use numbers for start_time and end_time):
 
 ```json
 {{
@@ -374,7 +400,7 @@ Provide final results in this format:
       "benefits": "Improves spinal mobility and shoulder strength.",
       "counteracts": "Great if you sit long hours; releases tension in lower back.",
       "fitness_level": 3,
-      "rounds_reps": "Perform 3 rounds, holding each pose for 5-7 seconds.",
+      "rounds_reps": "Perform 10-12 controlled reps per side, resting 30 seconds between sets.",
       "intensity": 4,
       "confidence_score": 0.91
     }}
@@ -531,144 +557,125 @@ Please analyze the video and return a JSON structure of distinct exercises using
         logger.info(f"Video file: {video_file}")
         logger.info(f"Temp dir: {temp_dir}")
         
-        # Check for overlapping exercises and consolidate them
-        if len(exercises) > 1:
-            logger.info(f"Multiple exercises detected, checking for overlaps...")
-            
-            # Sort exercises by start time
-            sorted_exercises = sorted(exercises, key=lambda x: x['start_time'])
-            
-            # Check for significant overlaps (>50% overlap)
-            consolidated_exercises = []
-            for i, exercise in enumerate(sorted_exercises):
-                is_overlapping = False
-                
-                for j, other_exercise in enumerate(sorted_exercises):
-                    if i == j:
-                        continue
-                    
-                    # Calculate overlap
-                    overlap_start = max(exercise['start_time'], other_exercise['start_time'])
-                    overlap_end = min(exercise['end_time'], other_exercise['end_time'])
-                    overlap_duration = max(0, overlap_end - overlap_start)
-                    
-                    exercise_duration = exercise['end_time'] - exercise['start_time']
-                    other_duration = other_exercise['end_time'] - other_exercise['start_time']
-                    
-                    # Check if overlap is significant (>50% of either exercise)
-                    overlap_ratio_exercise = overlap_duration / exercise_duration if exercise_duration > 0 else 0
-                    overlap_ratio_other = overlap_duration / other_duration if other_duration > 0 else 0
-                    
-                    if float(overlap_ratio_exercise) > 0.5 or float(overlap_ratio_other) > 0.5:
-                        logger.warning(f"⚠️  Significant overlap detected between '{exercise['exercise_name']}' and '{other_exercise['exercise_name']}'")
-                        logger.warning(f"   Overlap: {overlap_duration:.1f}s ({overlap_ratio_exercise:.1%} of exercise, {overlap_ratio_other:.1%} of other)")
-                        is_overlapping = True
-                        break
-                
-                if not is_overlapping:
-                    consolidated_exercises.append(exercise)
-                else:
-                    # If overlapping, keep the one with higher confidence or longer duration
-                    exercise_confidence = float(exercise.get('confidence_score', 0))
-                    other_confidence = float(other_exercise.get('confidence_score', 0))
-                    
-                    if exercise_confidence > other_confidence:
-                        consolidated_exercises.append(exercise)
-                        logger.info(f"✅ Kept '{exercise['exercise_name']}' (higher confidence)")
-                    elif float(exercise_duration) > float(other_duration):
-                        consolidated_exercises.append(exercise)
-                        logger.info(f"✅ Kept '{exercise['exercise_name']}' (longer duration)")
-                    else:
-                        logger.info(f"✅ Kept '{other_exercise['exercise_name']}' (better choice)")
-            
-            if len(consolidated_exercises) < len(exercises):
-                logger.info(f"Consolidated {len(exercises)} exercises down to {len(consolidated_exercises)} non-overlapping exercises")
-                exercises = consolidated_exercises
-        
+        # Pre-filter: Only keep exercises with valid float times
+        def is_valid_time(ex):
+            try:
+                float(ex.get('start_time', -1))
+                float(ex.get('end_time', -1))
+                return True
+            except (TypeError, ValueError):
+                logger.warning(f"Skipping exercise with invalid times: {ex}")
+                return False
+
+        filtered_exercises = [ex for ex in exercises if is_valid_time(ex)]
+        # Now all start/end times are valid floats
+
+        # Sort by start time
+        filtered_exercises.sort(key=lambda x: float(x['start_time']))
+
+        consolidated_exercises = []
+        for i, exercise in enumerate(filtered_exercises):
+            start_time = float(exercise['start_time'])
+            end_time = float(exercise['end_time'])
+            is_overlapping = False
+            for j, other_exercise in enumerate(filtered_exercises):
+                if i == j:
+                    continue
+                other_start = float(other_exercise['start_time'])
+                other_end = float(other_exercise['end_time'])
+                # Overlap logic
+                overlap_start = max(start_time, other_start)
+                overlap_end = min(end_time, other_end)
+                overlap_duration = max(0.0, overlap_end - overlap_start)
+                exercise_duration = end_time - start_time
+                other_duration = other_end - other_start
+                overlap_ratio_exercise = overlap_duration / exercise_duration if exercise_duration > 0 else 0.0
+                overlap_ratio_other = overlap_duration / other_duration if other_duration > 0 else 0.0
+                if overlap_ratio_exercise > 0.5 or overlap_ratio_other > 0.5:
+                    is_overlapping = True
+                    break
+            if not is_overlapping:
+                consolidated_exercises.append(exercise)
         # If only one exercise detected, ensure it covers the full video duration
-        if len(exercises) == 1:
-            exercise = exercises[0]
+        if len(consolidated_exercises) == 1:
+            exercise = consolidated_exercises[0]
             video_duration = self._get_video_duration(video_file)
-            
-            # If the exercise doesn't cover most of the video, extend it
-            exercise_duration = exercise['end_time'] - exercise['start_time']
-            video_coverage = exercise_duration / video_duration if video_duration > 0 else 0
-            
-            if video_coverage < 0.8:  # If exercise covers less than 80% of video
+            start_time = float(exercise.get('start_time', 0.0))
+            end_time = float(exercise.get('end_time', 0.0))
+            if start_time == -1 or end_time == -1: # Check for -1 from is_valid_time
+                logger.warning(f"⚠️  Invalid start or end time for single exercise: {exercise}")
+                return []
+            exercise_duration = end_time - start_time
+            video_coverage = exercise_duration / video_duration if video_duration > 0 else 0.0
+            if video_coverage < 0.8:
                 logger.info(f"Single exercise detected but only covers {video_coverage:.1%} of video")
                 logger.info(f"Extending exercise to cover full video duration")
                 exercise['start_time'] = 0.0
                 exercise['end_time'] = video_duration
                 exercise['exercise_name'] = f"{exercise['exercise_name']} (Full Video)"
-        
         # Additional check: Prevent multiple clips with start times within 3 seconds of each other
-        if len(exercises) > 1:
+        if len(consolidated_exercises) > 1:
             logger.info(f"Checking for exercises with start times within 3 seconds of each other...")
-            
-            # Sort by start time again
-            sorted_exercises = sorted(exercises, key=lambda x: x['start_time'])
+            sorted_exercises = []
+            for ex in consolidated_exercises:
+                st = float(ex.get('start_time', 0.0))
+                if st == -1: # Check for -1 from is_valid_time
+                    logger.warning(f"⚠️  Skipping exercise with invalid start_time: {ex}")
+                    continue
+                sorted_exercises.append(ex)
+            sorted_exercises = sorted(sorted_exercises, key=lambda x: float(x['start_time']))
             filtered_exercises = []
-            
             for i, exercise in enumerate(sorted_exercises):
                 too_close = False
-                
-                # Check against all previously accepted exercises
+                start_time = float(exercise.get('start_time', 0.0))
+                if start_time == -1: # Check for -1 from is_valid_time
+                    logger.warning(f"⚠️  Invalid start_time for exercise: {exercise}")
+                    continue
                 for accepted_exercise in filtered_exercises:
-                    time_diff = abs(exercise['start_time'] - accepted_exercise['start_time'])
-                    
-                    if time_diff <= 3.0:  # Within 3 seconds
+                    accepted_start = float(accepted_exercise.get('start_time', 0.0))
+                    if accepted_start == -1: # Check for -1 from is_valid_time
+                        continue
+                    time_diff = abs(start_time - accepted_start)
+                    if time_diff <= 3.0:
                         logger.warning(f"⚠️  Exercise '{exercise['exercise_name']}' starts too close to '{accepted_exercise['exercise_name']}' ({time_diff:.1f}s apart)")
                         logger.warning(f"   Skipping '{exercise['exercise_name']}' to prevent duplicate clips")
                         too_close = True
                         break
-                
                 if not too_close:
                     filtered_exercises.append(exercise)
-                    logger.info(f"✅ Accepted '{exercise['exercise_name']}' (start time: {exercise['start_time']:.1f}s)")
+                    logger.info(f"✅ Accepted '{exercise['exercise_name']}' (start time: {start_time:.1f}s)")
                 else:
                     logger.info(f"❌ Skipped '{exercise['exercise_name']}' (too close to existing exercise)")
-            
-            if len(filtered_exercises) < len(exercises):
-                logger.info(f"Filtered {len(exercises)} exercises down to {len(filtered_exercises)} with adequate time separation")
-                exercises = filtered_exercises
-        
-        for i, exercise in enumerate(exercises):
+            if len(filtered_exercises) < len(consolidated_exercises):
+                logger.info(f"Filtered {len(consolidated_exercises)} exercises down to {len(filtered_exercises)} with adequate time separation")
+                consolidated_exercises = filtered_exercises
+        for i, exercise in enumerate(consolidated_exercises):
             try:
-                logger.info(f"Processing exercise {i+1}/{len(exercises)}: {exercise['exercise_name']}")
-                
-                # Create clips directory in storage
+                logger.info(f"Processing exercise {i+1}/{len(consolidated_exercises)}: {exercise['exercise_name']}")
                 clips_dir = os.path.join("storage", "clips")
                 os.makedirs(clips_dir, exist_ok=True)
                 logger.info(f"Created clips directory: {clips_dir}")
-                
-                # Generate unique filename with URL ID
                 exercise_name_clean = exercise['exercise_name'].replace(' ', '_').lower()
-                url_id = str(uuid.uuid4())[:8]  # Use first 8 chars of UUID as URL ID
+                url_id = str(uuid.uuid4())[:8]
                 clip_filename = f"{exercise_name_clean}_{url_id}.mp4"
                 clip_path = os.path.join(clips_dir, clip_filename)
                 logger.info(f"Clip path: {clip_path}")
-                
-                # Extract clip using subprocess and ffmpeg
-                start_time = exercise['start_time']
-                duration = exercise['end_time'] - exercise['start_time']
-                
-                # Filter out clips that are too short
+                start_time = float(exercise.get('start_time', 0.0))
+                end_time = float(exercise.get('end_time', 0.0))
+                if start_time == -1 or end_time == -1: # Check for -1 from is_valid_time
+                    logger.warning(f"⚠️  Skipping {exercise['exercise_name']} - invalid start or end time: {exercise}")
+                    continue
+                duration = end_time - start_time
                 if duration < min_duration:
                     logger.warning(f"⚠️  Skipping {exercise['exercise_name']} - duration {duration:.1f}s < {min_duration}s minimum")
                     continue
-                
-                # Filter out clips that are too long (likely not useful)
                 if duration > 60.0:
                     logger.warning(f"⚠️  Skipping {exercise['exercise_name']} - duration {duration:.1f}s > 60s maximum")
                     continue
-                
-                # Check if the exercise has meaningful content
-                if exercise.get('confidence_score', 0) < 0.3:
+                if float(exercise.get('confidence_score', 0.0)) < 0.3: # Check for -1 from is_valid_time
                     logger.warning(f"⚠️  Skipping {exercise['exercise_name']} - low confidence score {exercise.get('confidence_score', 0):.2f}")
                     continue
-                
-                logger.info(f"Extracting clip: {start_time}s to {exercise['end_time']}s (duration: {duration}s)")
-                
+                logger.info(f"Extracting clip: {start_time}s to {end_time}s (duration: {duration}s)")
                 ffmpeg_cmd = [
                     'ffmpeg',
                     '-y',
@@ -680,8 +687,6 @@ Please analyze the video and return a JSON structure of distinct exercises using
                     clip_path
                 ]
                 logger.info(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
-                
-                # Run ffmpeg in thread pool
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(
                     None,
@@ -697,26 +702,22 @@ Please analyze the video and return a JSON structure of distinct exercises using
                 if result.returncode != 0:
                     logger.error(f"ffmpeg failed with return code {result.returncode}")
                     continue
-                
-                # Verify clip was created
                 if os.path.exists(clip_path):
                     file_size = os.path.getsize(clip_path)
                     exercise['clip_path'] = clip_path
                     exercise['segments'] = [{
                         'start_time': start_time,
-                        'end_time': exercise['end_time']
+                        'end_time': end_time
                     }]
                     clips.append(exercise)
                     logger.info(f"✅ Generated clip: {clip_path} ({file_size:,} bytes)")
                 else:
                     logger.error(f"❌ Failed to generate clip for {exercise['exercise_name']} - file not created")
-                    
             except Exception as e:
                 logger.error(f"❌ Error generating clip for {exercise['exercise_name']}: {str(e)}")
                 import traceback
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 continue
-        
         logger.info(f"Clip generation complete. Generated {len(clips)} clips out of {len(exercises)} exercises")
         return clips
     
