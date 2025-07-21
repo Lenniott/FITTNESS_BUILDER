@@ -135,6 +135,53 @@ async def delete_compiled_workout(workout_id: str) -> bool:
         
         return result == "DELETE 1"
 
+async def get_compiled_workouts_by_source_url(source_url: str) -> List[Dict]:
+    """
+    Get compiled workouts that reference exercises from a specific source URL.
+    
+    Args:
+        source_url: Source video URL
+        
+    Returns:
+        List of compiled workout records
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        # Search for workouts that contain the source URL in user_requirements
+        # Escape % characters to prevent format specifier errors
+        escaped_source_url = source_url.replace('%', '%%')
+        rows = await conn.fetch("""
+            SELECT * FROM compiled_workouts 
+            WHERE user_requirements ILIKE $1
+            ORDER BY created_at DESC
+        """, f"%{escaped_source_url}%")
+        
+        workouts = []
+        for row in rows:
+            workouts.append(dict(row))
+        
+        return workouts
+
+async def delete_all_compiled_workouts() -> int:
+    """
+    Delete ALL compiled workouts from the database.
+    
+    Returns:
+        Number of workouts deleted
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            DELETE FROM compiled_workouts
+        """)
+        
+        # Extract count from result string like "DELETE 5"
+        deleted_count = int(result.split()[1]) if result.startswith("DELETE") else 0
+        logger.info(f"Deleted {deleted_count} compiled workouts from database")
+        return deleted_count
+
 async def close_database():
     """Close database connection pool."""
     global _pool

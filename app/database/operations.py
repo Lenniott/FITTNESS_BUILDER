@@ -73,10 +73,10 @@ async def init_database():
             CREATE INDEX IF NOT EXISTS idx_exercises_carousel_index ON exercises(carousel_index)
         """)
         
-        # Create unique constraint to prevent duplicate processing
+        # Create unique constraint to prevent duplicate processing of the same exercise
         await conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_unique_url_index 
-            ON exercises(normalized_url, carousel_index)
+            ON exercises(normalized_url, carousel_index, exercise_name)
         """)
         
         logger.info("Database tables initialized")
@@ -131,13 +131,14 @@ async def store_exercise(
         logger.info(f"Stored exercise: {exercise_name} (ID: {exercise_id})")
         return exercise_id
 
-async def check_existing_processing(normalized_url: str, carousel_index: int = 1) -> Optional[Dict]:
+async def check_existing_processing(normalized_url: str, carousel_index: int = 1, exercise_name: Optional[str] = None) -> Optional[Dict]:
     """
-    Check if a URL + carousel_index combination has already been processed.
+    Check if a specific exercise from a URL + carousel_index combination has already been processed.
     
     Args:
         normalized_url: Normalized URL (without query parameters)
         carousel_index: Index of carousel item (default 1 for single videos)
+        exercise_name: Specific exercise name to check (optional)
         
     Returns:
         Existing exercise record or None if not found
@@ -145,10 +146,22 @@ async def check_existing_processing(normalized_url: str, carousel_index: int = 1
     pool = await get_database_connection()
     
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-            SELECT * FROM exercises 
-            WHERE normalized_url = $1 AND carousel_index = $2
-        """, normalized_url, carousel_index)
+        if exercise_name:
+            # Check for specific exercise
+            row = await conn.fetchrow("""
+                SELECT * FROM exercises 
+                WHERE normalized_url = $1 AND carousel_index = $2 AND exercise_name = $3
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, normalized_url, carousel_index, exercise_name)
+        else:
+            # Check if any exercises exist for this URL/carousel combination
+            row = await conn.fetchrow("""
+                SELECT * FROM exercises 
+                WHERE normalized_url = $1 AND carousel_index = $2
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, normalized_url, carousel_index)
         
         return dict(row) if row else None
 
@@ -227,7 +240,9 @@ async def search_exercises(
         if query:
             param_count += 1
             conditions.append(f"exercise_name ILIKE ${param_count}")
-            params.append(f"%{query}%")
+            # Escape % characters to prevent format specifier errors
+            escaped_query = query.replace('%', '%%')
+            params.append(f"%{escaped_query}%")
         
         if fitness_level_min is not None:
             param_count += 1
@@ -269,7 +284,7 @@ async def search_exercises(
 
 async def delete_exercise(exercise_id: str) -> bool:
     """
-    Delete exercise by ID.
+    Delete exercise by ID with cascade cleanup.
     
     Args:
         exercise_id: Exercise UUID
@@ -280,15 +295,119 @@ async def delete_exercise(exercise_id: str) -> bool:
     pool = await get_database_connection()
     
     async with pool.acquire() as conn:
+        # First get the exercise to get file paths and qdrant_id
+        row = await conn.fetchrow("""
+            SELECT * FROM exercises WHERE id = $1
+        """, exercise_id)
+        
+        if not row:
+            return False
+        
+        exercise_data = dict(row)
+        
+        # Delete from database
         result = await conn.execute("""
             DELETE FROM exercises WHERE id = $1
         """, exercise_id)
         
-        return result == "DELETE 1"
+        if result == "DELETE 1":
+            # Cascade cleanup
+            await _cascade_cleanup_exercise(exercise_data)
+            return True
+        
+        return False
+
+async def _cascade_cleanup_exercise(exercise_data: Dict):
+    """
+    Perform cascade cleanup for a deleted exercise.
+    
+    Args:
+        exercise_data: The exercise data that was deleted
+    """
+    try:
+        # 1. Delete from vector store if qdrant_id exists
+        if exercise_data.get('qdrant_id'):
+            from app.database.vectorization import delete_embedding
+            await delete_embedding(exercise_data['qdrant_id'])
+        
+        # 2. Delete video file if it exists
+        video_path = exercise_data.get('video_path', '')
+        if video_path:
+            await _delete_video_file(video_path)
+        
+        # 3. Clean up any compiled workouts that reference this exercise
+        await _cleanup_compiled_workouts(exercise_data.get('url', ''))
+        
+        logger.info(f"Cascade cleanup completed for exercise: {exercise_data.get('exercise_name', 'Unknown')}")
+        
+    except Exception as e:
+        logger.error(f"Error during cascade cleanup: {str(e)}")
+
+async def _delete_video_file(video_path: str):
+    """
+    Delete video file from storage.
+    
+    Args:
+        video_path: Path to video file
+    """
+    try:
+        import os
+        from pathlib import Path
+        
+        # Handle different path formats
+        if video_path.startswith('/app/'):
+            # Container path
+            file_path = Path(video_path)
+        elif video_path.startswith('storage/'):
+            # Relative path
+            file_path = Path(video_path)
+        elif video_path.startswith('/tmp/storage/'):
+            # Convert to container path
+            file_path = Path(video_path.replace('/tmp/storage/', '/app/storage/'))
+        else:
+            # Assume it's a filename in clips directory
+            file_path = Path(f"/app/storage/clips/{os.path.basename(video_path)}")
+        
+        if file_path.exists():
+            file_path.unlink()
+            logger.info(f"Deleted video file: {file_path}")
+        else:
+            logger.warning(f"Video file not found: {file_path}")
+            
+    except Exception as e:
+        logger.error(f"Error deleting video file {video_path}: {str(e)}")
+
+async def _cleanup_compiled_workouts(source_url: str):
+    """
+    Clean up compiled workouts that reference exercises from a specific URL.
+    
+    Args:
+        source_url: URL of the source video
+    """
+    try:
+        from app.database.compilation_operations import get_compiled_workouts_by_source_url, delete_compiled_workout
+        
+        # Get compiled workouts that reference this source
+        compiled_workouts = await get_compiled_workouts_by_source_url(source_url)
+        
+        for workout in compiled_workouts:
+            # Delete the compiled video file
+            video_path = workout.get('video_path', '')
+            if video_path:
+                await _delete_video_file(video_path)
+            
+            # Delete from database
+            await delete_compiled_workout(workout['id'])
+            
+        if compiled_workouts:
+            logger.info(f"Cleaned up {len(compiled_workouts)} compiled workouts for URL: {source_url}")
+            
+    except Exception as e:
+        logger.error(f"Error cleaning up compiled workouts: {str(e)}")
 
 async def delete_exercises_by_url(url: str) -> int:
     """
-    Delete all exercises for a specific URL.
+    Delete all exercises for a specific URL with cascade cleanup.
     
     Args:
         url: Video URL to delete
@@ -299,18 +418,132 @@ async def delete_exercises_by_url(url: str) -> int:
     pool = await get_database_connection()
     
     async with pool.acquire() as conn:
+        # Get all exercises for this URL first
+        rows = await conn.fetch("""
+            SELECT * FROM exercises WHERE url = $1
+        """, url)
+        
+        exercises = [dict(row) for row in rows]
+        
+        # Delete from database
         result = await conn.execute("""
             DELETE FROM exercises WHERE url = $1
         """, url)
         
         # Extract count from result string like "DELETE 5"
         deleted_count = int(result.split()[1]) if result.startswith("DELETE") else 0
+        
+        if deleted_count > 0:
+            # Cascade cleanup for all deleted exercises
+            for exercise_data in exercises:
+                await _cascade_cleanup_exercise(exercise_data)
+        
         logger.info(f"Deleted {deleted_count} exercises for URL: {url}")
+        return deleted_count
+
+async def delete_exercises_by_criteria(
+    fitness_level_min: Optional[int] = None,
+    fitness_level_max: Optional[int] = None,
+    intensity_min: Optional[int] = None,
+    intensity_max: Optional[int] = None,
+    exercise_name_pattern: Optional[str] = None,
+    created_before: Optional[str] = None,
+    created_after: Optional[str] = None
+) -> int:
+    """
+    Delete exercises based on criteria with cascade cleanup.
+    
+    Args:
+        fitness_level_min: Minimum fitness level
+        fitness_level_max: Maximum fitness level
+        intensity_min: Minimum intensity
+        intensity_max: Maximum intensity
+        exercise_name_pattern: Pattern to match exercise names
+        created_before: Delete exercises created before this date (ISO format)
+        created_after: Delete exercises created after this date (ISO format)
+        
+    Returns:
+        Number of exercises deleted
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        # Build dynamic query to get exercises to delete
+        conditions = []
+        params = []
+        param_count = 0
+        
+        if fitness_level_min is not None:
+            param_count += 1
+            conditions.append(f"fitness_level >= ${param_count}")
+            params.append(fitness_level_min)
+        
+        if fitness_level_max is not None:
+            param_count += 1
+            conditions.append(f"fitness_level <= ${param_count}")
+            params.append(fitness_level_max)
+        
+        if intensity_min is not None:
+            param_count += 1
+            conditions.append(f"intensity >= ${param_count}")
+            params.append(intensity_min)
+        
+        if intensity_max is not None:
+            param_count += 1
+            conditions.append(f"intensity <= ${param_count}")
+            params.append(intensity_max)
+        
+        if exercise_name_pattern:
+            param_count += 1
+            conditions.append(f"exercise_name ILIKE ${param_count}")
+            # Escape % characters to prevent format specifier errors
+            escaped_pattern = exercise_name_pattern.replace('%', '%%')
+            params.append(f"%{escaped_pattern}%")
+        
+        if created_before:
+            param_count += 1
+            conditions.append(f"created_at < ${param_count}")
+            params.append(created_before)
+        
+        if created_after:
+            param_count += 1
+            conditions.append(f"created_at > ${param_count}")
+            params.append(created_after)
+        
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        
+        # Get exercises to delete
+        query_sql = f"""
+            SELECT * FROM exercises 
+            WHERE {where_clause}
+        """
+        
+        rows = await conn.fetch(query_sql, *params)
+        exercises = [dict(row) for row in rows]
+        
+        if not exercises:
+            return 0
+        
+        # Delete from database
+        delete_sql = f"""
+            DELETE FROM exercises 
+            WHERE {where_clause}
+        """
+        
+        result = await conn.execute(delete_sql, *params)
+        deleted_count = int(result.split()[1]) if result.startswith("DELETE") else 0
+        
+        if deleted_count > 0:
+            # Cascade cleanup for all deleted exercises
+            for exercise_data in exercises:
+                await _cascade_cleanup_exercise(exercise_data)
+        
+        logger.info(f"Deleted {deleted_count} exercises based on criteria")
         return deleted_count
 
 async def delete_all_exercises() -> int:
     """
-    Delete ALL exercises from the database.
+    Delete ALL exercises from the database with cascade cleanup.
     
     Returns:
         Number of exercises deleted
@@ -318,12 +551,26 @@ async def delete_all_exercises() -> int:
     pool = await get_database_connection()
     
     async with pool.acquire() as conn:
-        result = await conn.execute("""
-            DELETE FROM exercises
-        """)
+        # Get all exercises first for cleanup
+        rows = await conn.fetch("SELECT * FROM exercises")
+        exercises = [dict(row) for row in rows]
         
-        # Extract count from result string like "DELETE 5"
+        # Delete from database
+        result = await conn.execute("DELETE FROM exercises")
         deleted_count = int(result.split()[1]) if result.startswith("DELETE") else 0
+        
+        if deleted_count > 0:
+            # Cascade cleanup for all deleted exercises
+            for exercise_data in exercises:
+                await _cascade_cleanup_exercise(exercise_data)
+            
+            # Clean up all compiled workouts
+            try:
+                from app.database.compilation_operations import delete_all_compiled_workouts
+                await delete_all_compiled_workouts()
+            except Exception as e:
+                logger.error(f"Error cleaning up compiled workouts: {str(e)}")
+        
         logger.info(f"Deleted {deleted_count} exercises from database")
         return deleted_count
 
