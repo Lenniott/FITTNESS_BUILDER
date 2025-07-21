@@ -331,3 +331,14 @@ CREATE TABLE compiled_workouts (
 - **Frame Synchronization Issue**: Enhanced keyframe extractor was deleting frames during cleanup while processor was trying to access them. Added 2-second wait and re-verification to ensure all frame operations complete before processing.
 - **Enhanced Keyframe Extractor Async Issues**: Made the enhanced keyframe extractor fully async by converting cleanup and frame rate constraint functions to async operations. This ensures all file operations complete before the processor tries to access frames.
 - **Format Specifier Error**: Fixed "Invalid format specifier" error by escaping % characters in database queries. The error was caused by unescaped % characters in URL patterns and exercise name patterns used in SQL LIKE queries.
+
+### July 2024 Pipeline & Frame Extraction Overhaul
+- **Enhanced Frame Extraction**: All frames from the extraction folder are used for AI analysis (no filtering, no artificial limits, consistent naming)
+- **Processor Logic**:
+  - Adds carousel context to the AI prompt (first video in carousel is often an intro/hook, skip if no exercise is present)
+  - Prevents multiple clips with start times within 3 seconds of each other
+  - Consolidates overlapping exercises (>50% overlap)
+  - Extends single exercises to cover the full video duration if needed
+  - Uses improved AI prompt with explicit rules for non-overlapping, non-duplicate, and complete movement detection
+- **Robustness**: The pipeline is now robust against duplicate, overlapping, or fragmented exercise detection
+- **Instagram Carousel Handling**: All videos are downloaded once, and each is processed individually. The system is robust for both single-cut and multi-cut videos, and for carousels with intro/hook videos.
