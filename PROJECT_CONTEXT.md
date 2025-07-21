@@ -42,6 +42,7 @@ Build a comprehensive fitness knowledge bank with curated exercise clips and on-
 - **AI Analysis**: Exercise detection with Gemini multimodal analysis (automatic fallback between API keys), scene detection, content analysis
 - **Storage**: Permanent clip storage in `storage/clips/` with database metadata
 - **Database**: PostgreSQL for exercise data with start/end timing, Qdrant for vector search
+  - **Note:** Postgres and Qdrant are external services, typically running on the same Docker network in production. They are not part of this project's containers, and the processor connects to them via their network IPs (e.g., `192.168.0.47`) or Docker network aliases.
 - **Testing**: Pytest with async support and coverage reporting
 - **Carousel Support**: Proper Instagram carousel detection and individual item processing
 - **Data Management**: Comprehensive delete endpoints for cleanup across database, vector store, and files
@@ -76,6 +77,7 @@ Build a comprehensive fitness knowledge bank with curated exercise clips and on-
 - FFmpeg for video processing
 - Environment variables for API keys and database connections
 - Docker containerization for production deployment
+- **External Services:** Postgres and Qdrant must be running and accessible on the same Docker network (or via their network IPs) for the processor to function. These are not included in this project's containers.
 
 ## Design Philosophy
 - "Invisible made visible" through chaos-to-organization animations

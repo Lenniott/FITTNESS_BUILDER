@@ -18,28 +18,20 @@ import asyncio
 import json
 import logging
 import os
-import tempfile
 import time
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import uuid
 from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
 import cv2
-import ffmpeg
-import numpy as np
 from openai import OpenAI
 import google.generativeai as genai  # type: ignore
 import subprocess
 
 from app.services.downloaders import download_media_and_metadata
 from app.services.transcription import transcribe_audio
-from app.database.operations import store_exercise, get_database_connection, check_existing_processing
+from app.database.operations import store_exercise, check_existing_processing
 from app.database.vectorization import store_embedding
-from app.utils.url_processor import extract_carousel_info, detect_carousel_items
+from app.utils.url_processor import extract_carousel_info
 from app.utils.enhanced_keyframe_extraction import enhanced_keyframe_extractor
 
 logger = logging.getLogger(__name__)
@@ -165,10 +157,9 @@ class VideoProcessor:
                     carousel_context = f"""
 CAROUSEL CONTEXT:
 This is video {i+1} of {carousel_count} in an Instagram carousel.
-- First videos in carousels are often intro/hook videos with no actual exercises
+- First videos in carousels are often intro/hook videos and the exercises are hidden under the text so are not useful or they are a montage of exercises so we should skip them, unless we can see a full exercise clearly in the video.
 - Look for text overlays, captions, or spoken content that indicates this is just an intro
-- If the video shows text like "these exercises..." but never specifies what they are, it's likely an intro
-- If the video has large, all-encompassing text overlays without specific exercise instructions, skip it
+- If the video shows text is in the center of the screen obstructing the exercise, skip it.
 - Only process videos that contain actual exercise demonstrations or specific workout instructions
 """
                 
@@ -307,70 +298,111 @@ This is video {i+1} of {carousel_count} in an Instagram carousel.
         logger.info(f"🚀 Sending {len(frame_data)} frames to LLM")
         logger.info(f"📊 Frame explanations count: {len(frame_explanations)}")
         
+        # Build carousel context section
+        carousel_context_section = f"""
+📌 CAROUSEL CONTEXT
+This video is item {carousel_index} of {total_carousel_items} in a carousel post.
+
+Carousel slides in fitness content often serve different purposes:
+
+1. **Video 1 (First)**: 
+   - Often a hook or promotional showreel.
+   - May contain title text or overlay obstructing the movement.
+   - May contain a fast montage of exercises with no complete reps.
+   - 🤖 Rule: **Skip unless full, clearly visible exercise movement is demonstrated.**
+
+2. **Middle Videos (2 to N-1)**:
+   - Typically feature fully demonstrated exercises.
+   - 🤖 Rule: **Prioritize for exercise detection.**
+
+3. **Final Video (Last)**:
+   - Might showcase additional tips, credits, or cool-downs.
+   - 🤖 Rule: **Analyze carefully—include only if instructional content or movement is clear.**
+
+Use this structure to decide which frames are worth processing as exercise clips.
+"""
+
         # Create prompt for Gemini
         prompt = f"""
-Analyze this workout video and extract individual exercise segments with complete details:
+You're an expert in exercise video segmentation. Your task is to analyze a video's frames, visual cuts (with timestamps), transcript (when available), and video description to identify discrete *exercise segments*.
 
-VIDEO METADATA:
-- Description: {metadata.get('description', 'No description')}
-- Tags: {', '.join(metadata.get('tags', []))}
-- Duration: {video_duration:.1f} seconds (actual video duration)
+Use the following process step-by-step:
 
-{carousel_context}
+---
 
-{transcript_section}
+**STEP 1: Frame Cut Analysis**
+Read each named cut (e.g., Cut 3: 14.000-18.000s) and answer:
+- Does it depict a *full single exercise* or *a sequence (flow)*?
+- Is there enough visible movement (minimum 3.5s) to identify an exercise?
+- Is it a demonstration (incomplete/mid-rep), a transition, or a useful tutorial segment?
+- Is the movement unique (vs already described)?
 
-FRAME ANALYSIS:
-The frames show different video segments/cuts with their start and end times:
-{cut_start_end_time}
+✅ Keep if:
+- The movement is sustained (3.5s+) and visually instructive.
+- It shows a unique movement pattern.
+- It starts close to the frame's `start_time` and ends cleanly.
 
-FRAMES: [attached keyframes with movement analysis]
+🚫 Skip if:
+- There's overlaid text over the exercise (e.g. intro).
+- It's a montage, warm-up clip, or transition between moves.
+- It's repeated content or an unclear camera angle.
+- No noteworthy movement occurs.
 
-CRITICAL RULES:
-1. **NO OVERLAPPING EXERCISES**: Each exercise must have unique, non-overlapping time ranges
-2. **ONE EXERCISE PER TIME SEGMENT**: If multiple frames show the same time period, identify ONE primary exercise
-3. **AVOID DUPLICATES**: Do not create multiple exercises that describe the same movement pattern
-4. **PRIORITIZE COMPLETE MOVEMENTS**: Choose the most complete/representative exercise for each time segment
+---
 
-EXERCISE FLOW CONCEPT:
-An "exercise flow" is a series of exercises performed in sequence that together form one complete repetition. For example:
-- A yoga flow might be: Downward Dog → Plank → Chaturanga → Upward Dog → Downward Dog
-- A strength flow might be: Push-up → Mountain Climber → Burpee → Jump Squat
-- A mobility flow might be: Cat-Cow → Child's Pose → Thread the Needle → Pigeon Pose
+**STEP 2: Timestamp Anchoring**
+For valid frames:
+- Align start and end times with the actual timestamps from frame labeling (e.g., start_time = 14.0 if frame = "cut_3_start_time_14000_end_time_18000.jpg").
 
-Each flow is considered ONE exercise with multiple movements within it. The entire flow gets one exercise name and timing.
+---
 
-For each distinct exercise or flow you identify, provide a JSON response with:
+**STEP 3: Build JSON Output**
+For each exercise, you must provide a clear, actionable recommendation for `rounds_reps`:
+- If the video does not specify, use your expertise to recommend a typical rep/round scheme for this movement, as a fitness instructor would (e.g., "Perform 8-12 reps per side", "Complete 3 rounds of 30 seconds each", or "Repeat for 45 seconds with good form").
+- Never leave this field vague or empty—always provide a clear, actionable recommendation.
+
+Provide final results in this format:
+
+```json
 {{
   "exercises": [
     {{
-      "exercise_name": "specific exercise name or flow name",
-      "start_time": 0.0,
-      "end_time": 0.0,
-      "how_to": "detailed step-by-step instructions for the entire exercise or flow",
-      "benefits": "physical/mental benefits, muscles targeted, nervous system effects",
-      "counteracts": "problems this exercise helps solve (sitting, stiffness, etc.)",
-      "fitness_level": 0-10,
-      "rounds_reps": "specific instructions for duration/repetitions",
-      "intensity": 0-10,
-      "confidence_score": 0.95
+      "exercise_name": "Downward Dog → Upward Dog Flow",
+      "start_time": 14.0,
+      "end_time": 20.5,
+      "how_to": "Start in downward dog... transition through chaturanga... upward dog...",
+      "benefits": "Improves spinal mobility and shoulder strength.",
+      "counteracts": "Great if you sit long hours; releases tension in lower back.",
+      "fitness_level": 3,
+      "rounds_reps": "Perform 3 rounds, holding each pose for 5-7 seconds.",
+      "intensity": 4,
+      "confidence_score": 0.91
     }}
   ]
 }}
+```
 
-DETECTION RULES:
-- Look for sustained movement patterns that last 3.5+ seconds
-- Skip intro segments (first 2-3 seconds usually)
-- Skip outro segments (last 2-3 seconds usually) 
-- Skip brief demonstrations or transitions
-- Each exercise should show a complete movement pattern
-- Use EXACT frame timestamps for start_time and end_time
-- Focus on exercises with instructional value
-- Avoid repetitive or low-quality segments
-- If you see a series of connected movements, treat them as ONE flow exercise
-- If movements are clearly separate with pauses, treat them as separate exercises
-- **CRITICAL**: Ensure NO time overlap between exercises - each second should only belong to ONE exercise
-- If the entire video shows one continuous movement, identify it as ONE exercise
+Output must:
+
+Include only non-overlapping exercises;
+Avoid repetitive entries;
+Respect the real start/end boundaries tied to frame metadata;
+Treat flows (chained movements) as one exercise if performed as a full circuit.
+
+{carousel_context_section}
+
+VIDEO METADATA
+
+Description: {metadata.get('description', 'No description')}
+Tags: {', '.join(metadata.get('tags', []))}
+Duration: {video_duration:.1f} seconds
+TRANSCRIPT
+{transcript_section or "None (music / silent video)"}
+
+FRAME TIMESTAMPS
+{cut_start_end_time}
+
+Please analyze the video and return a JSON structure of distinct exercises using the logic above.
 """
         
         # Save AI prompt and metadata to temp directory for debugging
