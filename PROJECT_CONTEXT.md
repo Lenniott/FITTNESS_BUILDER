@@ -3,6 +3,31 @@
 ## Project Overview
 Gilgamesh is a modular video processing and AI analysis service that automatically analyzes videos, generates clips, and provides AI-powered curation. The service follows a "serene clarity" design philosophy with natural light, negative space, and textural contrast.
 
+## 🎯 **Future Vision: Fitness Knowledge Bank**
+
+### **Core Mission**
+Build a comprehensive fitness knowledge bank with curated exercise clips and on-demand workout routines based on user preferences and requirements.
+
+### **Key Concepts**
+- **Cut**: Single piece of continuous footage from source video
+- **Clip**: Created content that may combine multiple cuts for better exercise representation
+- **Flow**: Series of exercises done in succession creating one complete movement pattern
+- **Story**: Standalone exercise outcome with problem, goal, and solution
+
+### **User Experience Vision**
+- **On-Demand Workouts**: Personalized routines based on user requirements
+- **Fitness Knowledge Bank**: Curated exercise library with complete movement demonstrations
+- **Social Media Integration**: Smart content extraction from fitness influencers
+- **Quality Curation**: Only high-quality, complete movement demonstrations
+- **Easy Management**: URL tracking for simple content management
+
+### **Technical Vision**
+- **JSON Workout Structure**: Structured workout data for easy UI consumption
+- **Multi-Stage Compilation**: Intelligent workout creation pipeline
+- **Quality Validation**: Comprehensive movement range and form validation
+- **Deduplication System**: Variety and effectiveness in workout routines
+- **URL Attribution**: Complete content tracking and management
+
 ## Core Architecture
 - **FastAPI Backend**: Modern async web framework with rate limiting and CORS
 - **Modular Structure**: Clear separation between API, core logic, database, services, and utils
@@ -64,4 +89,27 @@ app/
 - Database: asyncpg, psycopg2-binary, qdrant-client
 - Web framework: fastapi, uvicorn, python-multipart
 - Testing: pytest, pytest-asyncio, pytest-cov
-- Environment: python-dotenv for configuration management 
+- Environment: python-dotenv for configuration management
+
+---
+
+## 🔗 **Cross-Document Dependencies**
+
+### **Pipeline Issues Dependencies**
+- **Issue #13-16**: AI Exercise Detection and Validation Issues
+- **Issue #17**: URL Tracking System
+- **Issue #18-22**: Social Media Content and Quality Issues
+
+### **AI Pipeline Upgrades Dependencies**
+- **Improvement #1**: Social Media Content Understanding
+- **Improvement #2**: Movement Range Validation
+- **Improvement #3**: URL Tracking System
+- **Improvement #4**: Exercise vs Flow Classification
+- **Improvement #5**: Deduplication System
+- **Improvement #6**: Enhanced Frame Analysis
+
+### **Future Vision Dependencies**
+- **Quality Standards**: Complete movement demonstration requirements
+- **User Experience**: On-demand workout routine generation
+- **Content Management**: URL tracking and attribution systems
+- **Technical Architecture**: JSON workout structure and multi-stage compilation 

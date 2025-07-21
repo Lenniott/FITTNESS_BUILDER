@@ -1,5 +1,17 @@
+
 """
 Core video processing pipeline for exercise clip extraction.
+
+PLAN:
+1. (services/downloaders.py) download the video and description & tags (in storage/temp) 
+2. (services/transcription.py) get the transcript - first make sure it has audio > then get the transcript
+3. (utils/enhanced_keyframe_extraction.py) extract the frames from the video
+4. Build prompt with all frames, transcript, video description and tags, and video duration
+5. Send to LLM with all frames and get JSON response
+6. Use JSON to create video clips from the original video
+7. Save clips to storage/clips as {exercise_name}_{urlid}.mp4
+8. Save clip information to database
+9. Save all data to qdrant database as a vector
 """
 
 import asyncio
@@ -28,6 +40,7 @@ from app.services.transcription import transcribe_audio
 from app.database.operations import store_exercise, get_database_connection, check_existing_processing
 from app.database.vectorization import store_embedding
 from app.utils.url_processor import extract_carousel_info, detect_carousel_items
+from app.utils.enhanced_keyframe_extraction import enhanced_keyframe_extractor
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +87,7 @@ class VideoProcessor:
         
     async def process_video(self, url: str) -> Dict:
         """
-        Complete video processing pipeline with carousel support.
+        Complete video processing pipeline.
         
         Args:
             url: Video URL to process
@@ -90,68 +103,104 @@ class VideoProcessor:
             normalized_url, carousel_index = extract_carousel_info(url)
             logger.info(f"Processing URL: {url} -> normalized: {normalized_url}, carousel_index: {carousel_index}")
             
-            # For carousels, we need to download first to know how many items exist
-            # For single videos, we can check immediately
-            if 'instagram.com' in url and '/p/' in url:
-                # This might be a carousel - download first to check
-                logger.info(f"Potential carousel detected, downloading to check item count")
-            else:
-                # Single video - check if already processed
-                existing_exercise = await check_existing_processing(normalized_url, carousel_index)
-                if existing_exercise:
-                    logger.info(f"URL already processed: {normalized_url} (index: {carousel_index})")
-                    return {
-                        "success": True,
-                        "processed_clips": [{
-                            'exercise_id': existing_exercise['id'],
-                            'exercise_name': existing_exercise['exercise_name'],
-                            'video_path': existing_exercise['video_path'],
-                            'segments_count': 1,
-                            'total_duration': existing_exercise['end_time'] - existing_exercise['start_time'] if existing_exercise['end_time'] and existing_exercise['start_time'] else 0,
-                            'segments': [{
-                                'start_time': existing_exercise['start_time'],
-                                'end_time': existing_exercise['end_time']
-                            }] if existing_exercise['start_time'] and existing_exercise['end_time'] else []
-                        }],
-                        "total_clips": 1,
-                        "processing_time": 0,
-                        "temp_dir": None,
-                        "already_processed": True
-                    }
+            # Check if already processed (but allow multiple exercises per URL/carousel)
+            # We'll let the database constraint handle duplicates at the exercise level
+            logger.info(f"Processing URL: {normalized_url} (index: {carousel_index}) - allowing multiple exercises")
             
             # Step 1: Download video and extract metadata
             logger.info(f"Starting video processing for: {url}")
             download_result = await download_media_and_metadata(url)
             temp_dir = download_result['temp_dir']
             
-            # Validate video quality before processing
-            video_file = download_result['files'][0] if download_result['files'] else None
-            if video_file and not self._validate_video_quality(video_file):
-                logger.warning(f"⚠️  Skipping video due to quality issues: {video_file}")
-                return {
-                    "success": False,
-                    "processed_clips": [],
-                    "total_clips": 0,
-                    "processing_time": time.time() - start_time,
-                    "temp_dir": temp_dir,
-                    "error": "Video quality validation failed"
-                }
+            # Process all video files from the download
+            all_stored_exercises = []
             
-            # Check if this is a carousel with multiple files
-            is_carousel = download_result.get('is_carousel', False)
-            carousel_count = download_result.get('carousel_count', 1)
+            # Get all video files from the download result
+            video_files = download_result['files']
+            logger.info(f"Processing {len(video_files)} video files from download")
             
-            if is_carousel and carousel_count > 1:
-                logger.info(f"Detected carousel with {carousel_count} items")
-                return await self._process_carousel(url, normalized_url, download_result, temp_dir, start_time)
-            else:
-                # Single video processing
-                video_file = download_result['files'][0] if download_result['files'] else None
+            # Process each video file individually
+            for i, video_file in enumerate(video_files):
+                logger.info(f"Processing video {i+1}/{len(video_files)}: {os.path.basename(video_file)}")
                 
-                if not video_file:
-                    raise ValueError("No video file downloaded")
+                # Step 2: Transcribe audio for this video
+                logger.info(f"Transcribing audio for {os.path.basename(video_file)}...")
+                transcript = await transcribe_audio(video_file)
                 
-                return await self._process_single_video(url, normalized_url, carousel_index, video_file, download_result, temp_dir, start_time)
+                # Save transcript to temp directory for debugging
+                transcript_file = os.path.join(temp_dir, f"transcript_{i+1}.json")
+                with open(transcript_file, 'w') as f:
+                    json.dump(transcript, f, indent=2)
+                logger.info(f"Saved transcript to: {transcript_file}")
+                
+                # Step 3: Extract keyframes for this video
+                logger.info(f"Extracting keyframes for {os.path.basename(video_file)}...")
+                frames_dir = os.path.join(temp_dir, f"frames_{i+1}")
+                os.makedirs(frames_dir, exist_ok=True)
+                
+                # Extract frames using enhanced keyframe extractor
+                frame_files = await enhanced_keyframe_extractor.extract_keyframes(video_file, frames_dir)
+                logger.info(f"Enhanced keyframe extractor completed, extracted {len(frame_files)} frames")
+                
+                # Get ALL frames from the folder (bypass any filtering)
+                all_frames_in_folder = []
+                if os.path.exists(frames_dir):
+                    for filename in os.listdir(frames_dir):
+                        if filename.endswith('.jpg'):
+                            frame_path = os.path.join(frames_dir, filename)
+                            all_frames_in_folder.append(frame_path)
+                
+                logger.info(f"Found {len(all_frames_in_folder)} frames in folder vs {len(frame_files)} from extractor")
+                
+                # Use ALL frames from folder instead of filtered list
+                frame_files = all_frames_in_folder
+                
+                # Step 4: AI exercise detection for this video
+                logger.info(f"Detecting exercises with AI for {os.path.basename(video_file)}...")
+                
+                # Add carousel context for better AI decision making
+                carousel_context = ""
+                if download_result.get('is_carousel', False):
+                    carousel_count = download_result.get('carousel_count', 1)
+                    carousel_context = f"""
+CAROUSEL CONTEXT:
+This is video {i+1} of {carousel_count} in an Instagram carousel.
+- First videos in carousels are often intro/hook videos with no actual exercises
+- Look for text overlays, captions, or spoken content that indicates this is just an intro
+- If the video shows text like "these exercises..." but never specifies what they are, it's likely an intro
+- If the video has large, all-encompassing text overlays without specific exercise instructions, skip it
+- Only process videos that contain actual exercise demonstrations or specific workout instructions
+"""
+                
+                exercises = await self._detect_exercises(
+                    video_file=video_file,
+                    transcript=transcript,
+                    frames=frame_files,
+                    metadata=download_result,
+                    temp_dir=temp_dir,
+                    carousel_context=carousel_context,
+                    carousel_index=i+1,
+                    total_carousel_items=download_result.get('carousel_count', 1)
+                )
+                
+                # Step 5: Generate clips for this video
+                logger.info(f"Generating exercise clips for {os.path.basename(video_file)}...")
+                clips = await self._generate_clips(video_file, exercises, temp_dir)
+                
+                # Step 6: Store in database for this video
+                logger.info(f"Storing exercises in database for {os.path.basename(video_file)}...")
+                stored_exercises = await self._store_exercises(url, normalized_url, carousel_index, clips)
+                all_stored_exercises.extend(stored_exercises)
+            
+            processing_time = time.time() - start_time
+            
+            return {
+                "success": True,
+                "processed_clips": all_stored_exercises,
+                "total_clips": len(all_stored_exercises),
+                "processing_time": processing_time,
+                "temp_dir": temp_dir
+            }
             
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}")
@@ -159,61 +208,104 @@ class VideoProcessor:
                 await self._cleanup_temp_files(temp_dir)
             raise
     
-    async def _extract_keyframes(self, video_file: str, frames_dir: str) -> List[str]:
-        """Extract keyframes and interval frames from video."""
+    async def _detect_exercises(self, video_file: str, transcript: List[Dict], 
+                               frames: List[str], metadata: Dict, temp_dir: Optional[str] = None,
+                               carousel_context: str = "", carousel_index: int = 1, 
+                               total_carousel_items: int = 1) -> List[Dict]:
+        """Use Gemini to detect exercises in the video."""
+        
+        # Get video duration using OpenCV
         cap = cv2.VideoCapture(video_file)
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = total_frames / fps
-        
-        # Extract keyframes every 2 seconds + additional frames between
-        keyframe_interval = int(fps * 2)  # Every 2 seconds
-        frame_files = []
-        
-        frame_count = 0
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # Extract keyframes at regular intervals
-            if frame_count % keyframe_interval == 0:
-                timestamp_ms = int((frame_count / fps) * 1000)
-                frame_path = os.path.join(frames_dir, f"frame_{timestamp_ms:06d}.jpg")
-                cv2.imwrite(frame_path, frame)
-                frame_files.append(frame_path)
-            
-            # Also extract frames at 1/3 and 2/3 of each interval for better coverage
-            elif frame_count % (keyframe_interval // 3) == 0:
-                timestamp_ms = int((frame_count / fps) * 1000)
-                frame_path = os.path.join(frames_dir, f"frame_{timestamp_ms:06d}.jpg")
-                cv2.imwrite(frame_path, frame)
-                frame_files.append(frame_path)
-            
-            frame_count += 1
-        
+        video_duration = total_frames / fps if fps > 0 else 0
         cap.release()
-        logger.info(f"Extracted {len(frame_files)} frames from video")
-        return frame_files
-    
-    async def _detect_exercises(self, video_file: str, transcript: List[Dict], 
-                               frames: List[str], metadata: Dict, temp_dir: Optional[str] = None) -> List[Dict]:
-        """Use Gemini to detect exercises in the video."""
         
-        # Prepare transcript text
+        # Analyze transcript quality - check if transcript duration matches video duration
         transcript_text = ""
-        for segment in transcript:
-            transcript_text += f"[{segment['start']:.1f}s - {segment['end']:.1f}s] {segment['text']}\n"
+        meaningful_transcript = False
+        
+        # Calculate transcript duration
+        if transcript:
+            transcript_duration = max(segment['end'] for segment in transcript)
+            # Check if transcript duration is close to video duration (within 10% tolerance)
+            duration_diff = abs(transcript_duration - video_duration)
+            duration_tolerance = video_duration * 0.1  # 10% tolerance
+            
+            if duration_diff <= duration_tolerance:
+                meaningful_transcript = True
+                logger.info(f"Transcript duration ({transcript_duration:.1f}s) matches video duration ({video_duration:.1f}s)")
+            else:
+                logger.info(f"Transcript duration ({transcript_duration:.1f}s) doesn't match video duration ({video_duration:.1f}s) - likely music/silence")
+        else:
+            logger.info("No transcript available")
+        
+        # Only include transcript if it contains meaningful content
+        if meaningful_transcript:
+            for segment in transcript:
+                transcript_text += f"[{segment['start']:.1f}s - {segment['end']:.1f}s] {segment['text']}\n"
+            transcript_section = f"TRANSCRIPT: {transcript_text}"
+        else:
+            transcript_section = ""
+            logger.info("Transcript excluded from AI prompt - likely music/silence only")
         
         # Prepare frame data for Gemini
         frame_data = []
-        for frame_path in frames[:20]:  # Limit to 20 frames to avoid token limits
+        frame_explanations = []
+        
+        # Get all available frames and sort by timestamp
+        available_frames = []
+        logger.info(f"🔍 Processing {len(frames)} total frames from enhanced keyframe extractor")
+        
+        # Log all frame paths to debug
+        logger.info(f"📄 All frame paths from extractor:")
+        for i, frame_path in enumerate(frames):
+            logger.info(f"  {i+1:2d}. {frame_path}")
+        
+        # Use ALL frames that exist
+        available_frames = []
+        for frame_path in frames:
             if os.path.exists(frame_path):
-                with open(frame_path, 'rb') as f:
-                    frame_data.append({
-                        'mime_type': 'image/jpeg',
-                        'data': f.read()
-                    })
+                available_frames.append(frame_path)
+                logger.info(f"✅ Using frame: {os.path.basename(frame_path)}")
+            else:
+                logger.warning(f"⚠️  Frame file does not exist: {frame_path}")
+        
+        logger.info(f"📊 Found {len(available_frames)} frames out of {len(frames)} total frames")
+        
+        if len(available_frames) == 0:
+            logger.warning("No frames to process!")
+            return []
+        
+        for frame_path in available_frames:
+            # Just read the original frame file and send it to LLM
+            with open(frame_path, 'rb') as f:
+                frame_data.append({
+                    'mime_type': 'image/jpeg',
+                    'data': f.read()
+                })
+            
+            # Extract frame information for explanation using simplified naming convention
+            filename = os.path.basename(frame_path)
+            # New format: cut_X_start_time_Y_end_time_Z.jpg
+            parts = filename.replace('.jpg', '').split('_')
+            
+            if len(parts) >= 6:  # cut_X_start_time_Y_end_time_Z
+                cut_number = parts[1]
+                start_time_ms = int(parts[3])
+                end_time_ms = int(parts[5])
+                start_time_seconds = start_time_ms / 1000.0
+                end_time_seconds = end_time_ms / 1000.0
+                
+                # Explain what each component means
+                frame_explanation = f"Cut {cut_number}: {start_time_seconds:.3f}s to {end_time_seconds:.3f}s"
+                frame_explanations.append(frame_explanation)
+        
+        # Create simplified cut start/end time information
+        cut_start_end_time = "\n".join(frame_explanations) if frame_explanations else "No cuts available"
+        # Log exactly how many frames we're sending
+        logger.info(f"🚀 Sending {len(frame_data)} frames to LLM")
+        logger.info(f"📊 Frame explanations count: {len(frame_explanations)}")
         
         # Create prompt for Gemini
         prompt = f"""
@@ -222,20 +314,40 @@ Analyze this workout video and extract individual exercise segments with complet
 VIDEO METADATA:
 - Description: {metadata.get('description', 'No description')}
 - Tags: {', '.join(metadata.get('tags', []))}
-- Duration: {len(transcript) * 5} seconds (estimated)
+- Duration: {video_duration:.1f} seconds (actual video duration)
 
-TRANSCRIPT: {transcript_text}
+{carousel_context}
 
-FRAMES: [attached keyframes and interval frames]
+{transcript_section}
 
-For each distinct exercise you identify, provide a JSON response with:
+FRAME ANALYSIS:
+The frames show different video segments/cuts with their start and end times:
+{cut_start_end_time}
+
+FRAMES: [attached keyframes with movement analysis]
+
+CRITICAL RULES:
+1. **NO OVERLAPPING EXERCISES**: Each exercise must have unique, non-overlapping time ranges
+2. **ONE EXERCISE PER TIME SEGMENT**: If multiple frames show the same time period, identify ONE primary exercise
+3. **AVOID DUPLICATES**: Do not create multiple exercises that describe the same movement pattern
+4. **PRIORITIZE COMPLETE MOVEMENTS**: Choose the most complete/representative exercise for each time segment
+
+EXERCISE FLOW CONCEPT:
+An "exercise flow" is a series of exercises performed in sequence that together form one complete repetition. For example:
+- A yoga flow might be: Downward Dog → Plank → Chaturanga → Upward Dog → Downward Dog
+- A strength flow might be: Push-up → Mountain Climber → Burpee → Jump Squat
+- A mobility flow might be: Cat-Cow → Child's Pose → Thread the Needle → Pigeon Pose
+
+Each flow is considered ONE exercise with multiple movements within it. The entire flow gets one exercise name and timing.
+
+For each distinct exercise or flow you identify, provide a JSON response with:
 {{
   "exercises": [
     {{
-      "exercise_name": "specific exercise name",
+      "exercise_name": "specific exercise name or flow name",
       "start_time": 0.0,
       "end_time": 0.0,
-      "how_to": "detailed step-by-step instructions",
+      "how_to": "detailed step-by-step instructions for the entire exercise or flow",
       "benefits": "physical/mental benefits, muscles targeted, nervous system effects",
       "counteracts": "problems this exercise helps solve (sitting, stiffness, etc.)",
       "fitness_level": 0-10,
@@ -246,15 +358,19 @@ For each distinct exercise you identify, provide a JSON response with:
   ]
 }}
 
-Focus on identifying distinct exercises with clear start/end times. Provide comprehensive details for each exercise.
-
-IMPORTANT FILTERING CRITERIA:
-- Only detect exercises that are 5+ seconds long
+DETECTION RULES:
+- Look for sustained movement patterns that last 3.5+ seconds
+- Skip intro segments (first 2-3 seconds usually)
+- Skip outro segments (last 2-3 seconds usually) 
 - Skip brief demonstrations or transitions
-- Focus on complete exercise movements
+- Each exercise should show a complete movement pattern
+- Use EXACT frame timestamps for start_time and end_time
+- Focus on exercises with instructional value
 - Avoid repetitive or low-quality segments
-- Ensure exercises have clear start and end points
-- Prefer exercises with instructional value
+- If you see a series of connected movements, treat them as ONE flow exercise
+- If movements are clearly separate with pauses, treat them as separate exercises
+- **CRITICAL**: Ensure NO time overlap between exercises - each second should only belong to ONE exercise
+- If the entire video shows one continuous movement, identify it as ONE exercise
 """
         
         # Save AI prompt and metadata to temp directory for debugging
@@ -264,7 +380,11 @@ IMPORTANT FILTERING CRITERIA:
                 "metadata": metadata,
                 "transcript_segments": len(transcript),
                 "frame_count": len(frame_data),
-                "transcript_text": transcript_text
+                "transcript_text": transcript_text,
+                "video_duration": video_duration,
+                "meaningful_transcript": meaningful_transcript,
+                "transcript_included": bool(transcript_section),
+                "frame_explanations": frame_explanations
             }
             debug_file = os.path.join(temp_dir, "ai_debug_data.json")
             with open(debug_file, 'w') as f:
@@ -369,46 +489,6 @@ IMPORTANT FILTERING CRITERIA:
                     break
         
         return exercises
-
-    def _validate_video_quality(self, video_file: str) -> bool:
-        """Validate video quality and return True if video is worth processing."""
-        try:
-            cap = cv2.VideoCapture(video_file)
-            if not cap.isOpened():
-                logger.warning("⚠️  Video file cannot be opened")
-                return False
-            
-            # Get video properties
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = total_frames / fps if fps > 0 else 0
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            cap.release()
-            
-            # Quality checks
-            if duration < 10.0:
-                logger.warning(f"⚠️  Video too short: {duration:.1f}s")
-                return False
-            
-            if duration > 600.0:  # 10 minutes
-                logger.warning(f"⚠️  Video too long: {duration:.1f}s")
-                return False
-            
-            if width < 320 or height < 240:
-                logger.warning(f"⚠️  Video resolution too low: {width}x{height}")
-                return False
-            
-            if fps < 10:
-                logger.warning(f"⚠️  Video frame rate too low: {fps:.1f} fps")
-                return False
-            
-            logger.info(f"✅ Video quality validated: {duration:.1f}s, {width}x{height}, {fps:.1f} fps")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Error validating video quality: {str(e)}")
-            return False
     
     async def _generate_clips(self, video_file: str, exercises: List[Dict], 
                              temp_dir: str, min_duration: float = 5.0) -> List[Dict]:
@@ -419,6 +499,107 @@ IMPORTANT FILTERING CRITERIA:
         logger.info(f"Video file: {video_file}")
         logger.info(f"Temp dir: {temp_dir}")
         
+        # Check for overlapping exercises and consolidate them
+        if len(exercises) > 1:
+            logger.info(f"Multiple exercises detected, checking for overlaps...")
+            
+            # Sort exercises by start time
+            sorted_exercises = sorted(exercises, key=lambda x: x['start_time'])
+            
+            # Check for significant overlaps (>50% overlap)
+            consolidated_exercises = []
+            for i, exercise in enumerate(sorted_exercises):
+                is_overlapping = False
+                
+                for j, other_exercise in enumerate(sorted_exercises):
+                    if i == j:
+                        continue
+                    
+                    # Calculate overlap
+                    overlap_start = max(exercise['start_time'], other_exercise['start_time'])
+                    overlap_end = min(exercise['end_time'], other_exercise['end_time'])
+                    overlap_duration = max(0, overlap_end - overlap_start)
+                    
+                    exercise_duration = exercise['end_time'] - exercise['start_time']
+                    other_duration = other_exercise['end_time'] - other_exercise['start_time']
+                    
+                    # Check if overlap is significant (>50% of either exercise)
+                    overlap_ratio_exercise = overlap_duration / exercise_duration if exercise_duration > 0 else 0
+                    overlap_ratio_other = overlap_duration / other_duration if other_duration > 0 else 0
+                    
+                    if float(overlap_ratio_exercise) > 0.5 or float(overlap_ratio_other) > 0.5:
+                        logger.warning(f"⚠️  Significant overlap detected between '{exercise['exercise_name']}' and '{other_exercise['exercise_name']}'")
+                        logger.warning(f"   Overlap: {overlap_duration:.1f}s ({overlap_ratio_exercise:.1%} of exercise, {overlap_ratio_other:.1%} of other)")
+                        is_overlapping = True
+                        break
+                
+                if not is_overlapping:
+                    consolidated_exercises.append(exercise)
+                else:
+                    # If overlapping, keep the one with higher confidence or longer duration
+                    exercise_confidence = float(exercise.get('confidence_score', 0))
+                    other_confidence = float(other_exercise.get('confidence_score', 0))
+                    
+                    if exercise_confidence > other_confidence:
+                        consolidated_exercises.append(exercise)
+                        logger.info(f"✅ Kept '{exercise['exercise_name']}' (higher confidence)")
+                    elif float(exercise_duration) > float(other_duration):
+                        consolidated_exercises.append(exercise)
+                        logger.info(f"✅ Kept '{exercise['exercise_name']}' (longer duration)")
+                    else:
+                        logger.info(f"✅ Kept '{other_exercise['exercise_name']}' (better choice)")
+            
+            if len(consolidated_exercises) < len(exercises):
+                logger.info(f"Consolidated {len(exercises)} exercises down to {len(consolidated_exercises)} non-overlapping exercises")
+                exercises = consolidated_exercises
+        
+        # If only one exercise detected, ensure it covers the full video duration
+        if len(exercises) == 1:
+            exercise = exercises[0]
+            video_duration = self._get_video_duration(video_file)
+            
+            # If the exercise doesn't cover most of the video, extend it
+            exercise_duration = exercise['end_time'] - exercise['start_time']
+            video_coverage = exercise_duration / video_duration if video_duration > 0 else 0
+            
+            if video_coverage < 0.8:  # If exercise covers less than 80% of video
+                logger.info(f"Single exercise detected but only covers {video_coverage:.1%} of video")
+                logger.info(f"Extending exercise to cover full video duration")
+                exercise['start_time'] = 0.0
+                exercise['end_time'] = video_duration
+                exercise['exercise_name'] = f"{exercise['exercise_name']} (Full Video)"
+        
+        # Additional check: Prevent multiple clips with start times within 3 seconds of each other
+        if len(exercises) > 1:
+            logger.info(f"Checking for exercises with start times within 3 seconds of each other...")
+            
+            # Sort by start time again
+            sorted_exercises = sorted(exercises, key=lambda x: x['start_time'])
+            filtered_exercises = []
+            
+            for i, exercise in enumerate(sorted_exercises):
+                too_close = False
+                
+                # Check against all previously accepted exercises
+                for accepted_exercise in filtered_exercises:
+                    time_diff = abs(exercise['start_time'] - accepted_exercise['start_time'])
+                    
+                    if time_diff <= 3.0:  # Within 3 seconds
+                        logger.warning(f"⚠️  Exercise '{exercise['exercise_name']}' starts too close to '{accepted_exercise['exercise_name']}' ({time_diff:.1f}s apart)")
+                        logger.warning(f"   Skipping '{exercise['exercise_name']}' to prevent duplicate clips")
+                        too_close = True
+                        break
+                
+                if not too_close:
+                    filtered_exercises.append(exercise)
+                    logger.info(f"✅ Accepted '{exercise['exercise_name']}' (start time: {exercise['start_time']:.1f}s)")
+                else:
+                    logger.info(f"❌ Skipped '{exercise['exercise_name']}' (too close to existing exercise)")
+            
+            if len(filtered_exercises) < len(exercises):
+                logger.info(f"Filtered {len(exercises)} exercises down to {len(filtered_exercises)} with adequate time separation")
+                exercises = filtered_exercises
+        
         for i, exercise in enumerate(exercises):
             try:
                 logger.info(f"Processing exercise {i+1}/{len(exercises)}: {exercise['exercise_name']}")
@@ -428,9 +609,10 @@ IMPORTANT FILTERING CRITERIA:
                 os.makedirs(clips_dir, exist_ok=True)
                 logger.info(f"Created clips directory: {clips_dir}")
                 
-                # Generate unique filename
+                # Generate unique filename with URL ID
                 exercise_name_clean = exercise['exercise_name'].replace(' ', '_').lower()
-                clip_filename = f"{exercise_name_clean}_{uuid.uuid4().hex[:8]}.mp4"
+                url_id = str(uuid.uuid4())[:8]  # Use first 8 chars of UUID as URL ID
+                clip_filename = f"{exercise_name_clean}_{url_id}.mp4"
                 clip_path = os.path.join(clips_dir, clip_filename)
                 logger.info(f"Clip path: {clip_path}")
                 
@@ -562,138 +744,19 @@ IMPORTANT FILTERING CRITERIA:
         
         return stored_exercises
     
-    async def _process_single_video(self, url: str, normalized_url: str, carousel_index: int, 
-                                   video_file: str, download_result: Dict, temp_dir: str, start_time: float) -> Dict:
-        """Process a single video file."""
-        # Step 2: Transcribe audio
-        logger.info("Transcribing audio...")
-        transcript = await transcribe_audio(video_file)
-        
-        # Save transcript to temp directory for debugging
-        transcript_file = os.path.join(temp_dir, "transcript.json")
-        with open(transcript_file, 'w') as f:
-            json.dump(transcript, f, indent=2)
-        logger.info(f"Saved transcript to: {transcript_file}")
-        
-        # Step 3: Extract keyframes
-        logger.info("Extracting keyframes...")
-        frames_dir = os.path.join(temp_dir, "frames")
-        os.makedirs(frames_dir, exist_ok=True)
-        frame_files = await self._extract_keyframes(video_file, frames_dir)
-        
-        # Step 4: AI exercise detection
-        logger.info("Detecting exercises with AI...")
-        exercises = await self._detect_exercises(
-            video_file=video_file,
-            transcript=transcript,
-            frames=frame_files,
-            metadata=download_result,
-            temp_dir=temp_dir
-        )
-        
-        # Step 5: Generate clips
-        logger.info("Generating exercise clips...")
-        clips = await self._generate_clips(video_file, exercises, temp_dir)
-        
-        # Step 6: Store in database
-        logger.info("Storing exercises in database...")
-        stored_exercises = await self._store_exercises(url, normalized_url, carousel_index, clips)
-        
-        processing_time = time.time() - start_time
-        
-        return {
-            "success": True,
-            "processed_clips": stored_exercises,
-            "total_clips": len(stored_exercises),
-            "processing_time": processing_time,
-            "temp_dir": temp_dir
-        }
-    
-    async def _process_carousel(self, url: str, normalized_url: str, download_result: Dict, 
-                               temp_dir: str, start_time: float) -> Dict:
-        """Process all items in a carousel."""
-        all_clips = []
-        total_processing_time = 0
-        carousel_count = len(download_result['files'])
-        
-        # Check if ALL carousel items are already processed
-        all_processed = True
-        existing_items = []
-        
-        for i in range(carousel_count):
-            carousel_index = i + 1
-            existing_exercise = await check_existing_processing(normalized_url, carousel_index)
-            if existing_exercise:
-                existing_items.append({
-                    'exercise_id': existing_exercise['id'],
-                    'exercise_name': existing_exercise['exercise_name'],
-                    'video_path': existing_exercise['video_path'],
-                    'segments_count': 1,
-                    'total_duration': existing_exercise['end_time'] - existing_exercise['start_time'] if existing_exercise['end_time'] and existing_exercise['start_time'] else 0,
-                    'segments': [{
-                        'start_time': existing_exercise['start_time'],
-                        'end_time': existing_exercise['end_time']
-                    }] if existing_exercise['start_time'] and existing_exercise['end_time'] else [],
-                    'carousel_index': carousel_index
-                })
-            else:
-                all_processed = False
-        
-        # If all items are processed, return them
-        if all_processed and existing_items:
-            logger.info(f"All {carousel_count} carousel items already processed")
-            return {
-                "success": True,
-                "processed_clips": existing_items,
-                "total_clips": len(existing_items),
-                "processing_time": 0,
-                "temp_dir": None,
-                "carousel_processed": True,
-                "already_processed": True
-            }
-        
-        # Process items that haven't been processed yet
-        for i, video_file in enumerate(download_result['files']):
-            carousel_index = i + 1
-            logger.info(f"Processing carousel item {carousel_index}/{carousel_count}")
-            
-            # Check if this carousel item is already processed
-            existing_exercise = await check_existing_processing(normalized_url, carousel_index)
-            if existing_exercise:
-                logger.info(f"Carousel item {carousel_index} already processed")
-                all_clips.append({
-                    'exercise_id': existing_exercise['id'],
-                    'exercise_name': existing_exercise['exercise_name'],
-                    'video_path': existing_exercise['video_path'],
-                    'segments_count': 1,
-                    'total_duration': existing_exercise['end_time'] - existing_exercise['start_time'] if existing_exercise['end_time'] and existing_exercise['start_time'] else 0,
-                    'segments': [{
-                        'start_time': existing_exercise['start_time'],
-                        'end_time': existing_exercise['end_time']
-                    }] if existing_exercise['start_time'] and existing_exercise['end_time'] else [],
-                    'carousel_index': carousel_index
-                })
-                continue
-            
-            try:
-                # Process this carousel item
-                item_result = await self._process_single_video(url, normalized_url, carousel_index, video_file, download_result, temp_dir, start_time)
-                all_clips.extend(item_result['processed_clips'])
-                total_processing_time += item_result['processing_time']
-                
-            except Exception as e:
-                logger.error(f"Error processing carousel item {carousel_index}: {str(e)}")
-                continue
-        
-        return {
-            "success": True,
-            "processed_clips": all_clips,
-            "total_clips": len(all_clips),
-            "processing_time": total_processing_time,
-            "temp_dir": temp_dir,
-            "carousel_processed": True
-        }
-    
+    def _get_video_duration(self, video_file: str) -> float:
+        """Get video duration using OpenCV."""
+        try:
+            cap = cv2.VideoCapture(video_file)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = total_frames / fps if fps > 0 else 0
+            cap.release()
+            return duration
+        except Exception as e:
+            logger.error(f"Error getting video duration: {str(e)}")
+            return 0.0
+
     async def _cleanup_temp_files(self, temp_dir: str):
         """Clean up temporary files."""
         try:
@@ -704,4 +767,4 @@ IMPORTANT FILTERING CRITERIA:
             logger.error(f"Error cleaning up temp files: {str(e)}")
 
 # Global processor instance
-processor = VideoProcessor() 
+processor = VideoProcessor()        

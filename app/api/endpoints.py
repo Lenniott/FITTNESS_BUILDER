@@ -23,6 +23,10 @@ from app.database.vectorization import (
 
 logger = logging.getLogger(__name__)
 
+def escape_error_message(error: Exception) -> str:
+    """Escape format specifiers in error messages to prevent format specifier errors."""
+    return str(error).replace('%', '%%')
+
 router = APIRouter()
 
 # Import compilation endpoints
@@ -101,8 +105,9 @@ async def process_video(request: ProcessRequest, background_tasks: BackgroundTas
             return ProcessResponse(**result)
             
     except Exception as e:
-        logger.error(f"Error processing video: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        error_msg = escape_error_message(e)
+        logger.error(f"Error processing video: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Processing failed: {error_msg}")
 
 @router.get("/exercises", response_model=List[ExerciseResponse])
 async def get_exercises(url: Optional[str] = Query(None, description="Filter by video URL")):
@@ -123,8 +128,9 @@ async def get_exercises(url: Optional[str] = Query(None, description="Filter by 
             converted_exercises.append(ExerciseResponse(**exercise_dict))
         return converted_exercises
     except Exception as e:
-        logger.error(f"Error getting exercises: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get exercises: {str(e)}")
+        error_msg = escape_error_message(e)
+        logger.error(f"Error getting exercises: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to get exercises: {error_msg}")
 
 @router.get("/exercises/{exercise_id}", response_model=ExerciseResponse)
 async def get_exercise(exercise_id: str):
@@ -143,8 +149,9 @@ async def get_exercise(exercise_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting exercise {exercise_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get exercise: {str(e)}")
+        error_msg = escape_error_message(e)
+        logger.error(f"Error getting exercise {exercise_id}: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to get exercise: {error_msg}")
 
 @router.post("/exercises/search", response_model=List[ExerciseResponse])
 async def search_exercises_endpoint(request: SearchRequest):
@@ -262,19 +269,201 @@ async def delete_exercises_by_url(url: str):
 
 @router.delete("/exercises/{exercise_id}")
 async def delete_exercise_endpoint(exercise_id: str):
-    """Delete exercise by ID."""
+    """Delete exercise by ID with cascade cleanup."""
     try:
+        from app.database.operations import delete_exercise
+        
         success = await delete_exercise(exercise_id)
         if not success:
             raise HTTPException(status_code=404, detail="Exercise not found")
         
-        return {"message": "Exercise deleted successfully"}
+        return {"message": "Exercise deleted successfully with cascade cleanup"}
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting exercise {exercise_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete exercise: {str(e)}")
+
+@router.delete("/exercises/batch")
+async def delete_exercises_by_criteria(
+    fitness_level_min: Optional[int] = Query(None, description="Minimum fitness level (0-10)"),
+    fitness_level_max: Optional[int] = Query(None, description="Maximum fitness level (0-10)"),
+    intensity_min: Optional[int] = Query(None, description="Minimum intensity (0-10)"),
+    intensity_max: Optional[int] = Query(None, description="Maximum intensity (0-10)"),
+    exercise_name_pattern: Optional[str] = Query(None, description="Pattern to match exercise names"),
+    created_before: Optional[str] = Query(None, description="Delete exercises created before this date (ISO format)"),
+    created_after: Optional[str] = Query(None, description="Delete exercises created after this date (ISO format)")
+):
+    """
+    Delete exercises based on criteria with cascade cleanup.
+    
+    This endpoint allows you to delete multiple exercises based on various filters.
+    All deletions include cascade cleanup (database, vector store, files, compiled workouts).
+    
+    Examples:
+    - Delete all beginner exercises: ?fitness_level_max=3
+    - Delete high intensity exercises: ?intensity_min=8
+    - Delete exercises with "test" in name: ?exercise_name_pattern=test
+    - Delete old exercises: ?created_before=2024-01-01
+    """
+    try:
+        from app.database.operations import delete_exercises_by_criteria
+        
+        deleted_count = await delete_exercises_by_criteria(
+            fitness_level_min=fitness_level_min,
+            fitness_level_max=fitness_level_max,
+            intensity_min=intensity_min,
+            intensity_max=intensity_max,
+            exercise_name_pattern=exercise_name_pattern,
+            created_before=created_before,
+            created_after=created_after
+        )
+        
+        return {
+            "message": f"Successfully deleted {deleted_count} exercises with cascade cleanup",
+            "deleted_count": deleted_count,
+            "criteria": {
+                "fitness_level_min": fitness_level_min,
+                "fitness_level_max": fitness_level_max,
+                "intensity_min": intensity_min,
+                "intensity_max": intensity_max,
+                "exercise_name_pattern": exercise_name_pattern,
+                "created_before": created_before,
+                "created_after": created_after
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting exercises by criteria: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete exercises: {str(e)}")
+
+@router.delete("/exercises/purge-low-quality")
+async def purge_low_quality_exercises(
+    fitness_level_threshold: int = Query(3, description="Delete exercises below this fitness level"),
+    intensity_threshold: int = Query(3, description="Delete exercises below this intensity level"),
+    name_patterns: Optional[str] = Query(None, description="Comma-separated patterns to match for deletion")
+):
+    """
+    Purge low-quality exercises with cascade cleanup.
+    
+    This endpoint is specifically designed to remove "bad clips" based on quality criteria.
+    It deletes exercises that are:
+    - Below a certain fitness level (indicating poor quality)
+    - Below a certain intensity level (indicating boring content)
+    - Match specific name patterns (indicating test/placeholder content)
+    
+    Examples:
+    - Delete all low-quality exercises: /purge-low-quality
+    - Delete very low quality: ?fitness_level_threshold=2&intensity_threshold=2
+    - Delete test content: ?name_patterns=test,demo,placeholder
+    """
+    try:
+        from app.database.operations import delete_exercises_by_criteria
+        
+        # Build criteria for low-quality exercises
+        criteria = {
+            "fitness_level_max": fitness_level_threshold,
+            "intensity_max": intensity_threshold,
+            "exercise_name_pattern": None,
+            "created_before": None,
+            "created_after": None
+        }
+        
+        # Add name patterns if provided
+        if name_patterns:
+            patterns = [p.strip() for p in name_patterns.split(",")]
+            # Use the first pattern as the main pattern
+            criteria["exercise_name_pattern"] = patterns[0]
+        
+        deleted_count = await delete_exercises_by_criteria(**criteria)
+        
+        return {
+            "message": f"Successfully purged {deleted_count} low-quality exercises",
+            "deleted_count": deleted_count,
+            "quality_thresholds": {
+                "fitness_level_threshold": fitness_level_threshold,
+                "intensity_threshold": intensity_threshold,
+                "name_patterns": name_patterns.split(",") if name_patterns else None
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error purging low-quality exercises: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to purge exercises: {str(e)}")
+
+@router.get("/exercises/deletion-preview")
+async def preview_deletion_by_criteria(
+    fitness_level_min: Optional[int] = Query(None, description="Minimum fitness level (0-10)"),
+    fitness_level_max: Optional[int] = Query(None, description="Maximum fitness level (0-10)"),
+    intensity_min: Optional[int] = Query(None, description="Minimum intensity (0-10)"),
+    intensity_max: Optional[int] = Query(None, description="Maximum intensity (0-10)"),
+    exercise_name_pattern: Optional[str] = Query(None, description="Pattern to match exercise names"),
+    created_before: Optional[str] = Query(None, description="Exercises created before this date (ISO format)"),
+    created_after: Optional[str] = Query(None, description="Exercises created after this date (ISO format)")
+):
+    """
+    Preview what would be deleted based on criteria without actually deleting.
+    
+    This endpoint shows you exactly what would be deleted before you commit to the deletion.
+    """
+    try:
+        from app.database.operations import search_exercises
+        
+        # Use the same search logic to preview what would be deleted
+        exercises = await search_exercises(
+            query=exercise_name_pattern,
+            fitness_level_min=fitness_level_min,
+            fitness_level_max=fitness_level_max,
+            intensity_min=intensity_min,
+            intensity_max=intensity_max,
+            limit=1000  # Get more results for preview
+        )
+        
+        # Apply additional date filters if provided
+        if created_before or created_after:
+            from datetime import datetime
+            filtered_exercises = []
+            
+            for exercise in exercises:
+                created_at = exercise.get('created_at')
+                if created_at:
+                    if isinstance(created_at, str):
+                        created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    
+                    include = True
+                    if created_before:
+                        before_date = datetime.fromisoformat(created_before.replace('Z', '+00:00'))
+                        if created_at >= before_date:
+                            include = False
+                    
+                    if created_after and include:
+                        after_date = datetime.fromisoformat(created_after.replace('Z', '+00:00'))
+                        if created_at <= after_date:
+                            include = False
+                    
+                    if include:
+                        filtered_exercises.append(exercise)
+            
+            exercises = filtered_exercises
+        
+        return {
+            "preview_count": len(exercises),
+            "exercises": exercises[:50],  # Show first 50 for preview
+            "criteria": {
+                "fitness_level_min": fitness_level_min,
+                "fitness_level_max": fitness_level_max,
+                "intensity_min": intensity_min,
+                "intensity_max": intensity_max,
+                "exercise_name_pattern": exercise_name_pattern,
+                "created_before": created_before,
+                "created_after": created_after
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error previewing deletion: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to preview deletion: {str(e)}")
 
 @router.post("/exercises/{exercise_id}/generate-clip")
 async def generate_clip_from_database(exercise_id: str):
@@ -468,3 +657,134 @@ async def get_stats():
     except Exception as e:
         logger.error(f"Error getting stats: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}") 
+
+@router.get("/cleanup/analysis")
+async def analyze_storage():
+    """
+    Analyze storage usage and get cleanup recommendations.
+    
+    This endpoint provides a comprehensive analysis of your storage usage
+    and recommends cleanup actions to free up space.
+    """
+    try:
+        from app.utils.cleanup_utils import get_cleanup_recommendations
+        
+        recommendations = await get_cleanup_recommendations()
+        return recommendations
+        
+    except Exception as e:
+        logger.error(f"Error analyzing storage: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze storage: {str(e)}")
+
+@router.get("/cleanup/orphaned-files")
+async def find_orphaned_files():
+    """
+    Find files that exist in storage but are not referenced in the database.
+    
+    These are typically files from failed processing or manual deletions.
+    """
+    try:
+        from app.utils.cleanup_utils import find_orphaned_files
+        
+        orphaned_info = await find_orphaned_files()
+        return orphaned_info
+        
+    except Exception as e:
+        logger.error(f"Error finding orphaned files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to find orphaned files: {str(e)}")
+
+@router.delete("/cleanup/orphaned-files")
+async def cleanup_orphaned_files(confirm: bool = Query(False, description="Set to true to actually delete files")):
+    """
+    Clean up orphaned files (files not referenced in database).
+    
+    Args:
+        confirm: Must be set to true to actually delete files
+        
+    Returns:
+        Cleanup results
+    """
+    try:
+        from app.utils.cleanup_utils import cleanup_orphaned_files
+        
+        if not confirm:
+            raise HTTPException(status_code=400, detail="Must set confirm=true to delete files")
+        
+        result = await cleanup_orphaned_files(confirm=True)
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cleaning up orphaned files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to clean up orphaned files: {str(e)}")
+
+@router.delete("/cleanup/temp-files")
+async def cleanup_temp_files(
+    days_old: int = Query(7, description="Delete files older than this many days"),
+    confirm: bool = Query(False, description="Set to true to actually delete files"),
+    include_recent: bool = Query(False, description="Include recent temp files (for manual cleanup)")
+):
+    """
+    Clean up old temporary files.
+    
+    Args:
+        days_old: Delete files older than this many days
+        confirm: Must be set to true to actually delete files
+        include_recent: Include recent temp files (for manual cleanup)
+        
+    Returns:
+        Cleanup results
+    """
+    try:
+        from app.utils.cleanup_utils import cleanup_old_temp_files
+        
+        if not confirm:
+            raise HTTPException(status_code=400, detail="Must set confirm=true to delete files")
+        
+        result = await cleanup_old_temp_files(days_old=days_old, confirm=True, include_recent=include_recent)
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cleaning up temp files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to clean up temp files: {str(e)}")
+
+@router.get("/cleanup/preview")
+async def preview_cleanup_operations():
+    """
+    Preview all cleanup operations without actually deleting anything.
+    
+    This endpoint shows you exactly what would be cleaned up.
+    """
+    try:
+        from app.utils.cleanup_utils import (
+            analyze_storage_usage, 
+            find_orphaned_files, 
+            cleanup_orphaned_files, 
+            cleanup_old_temp_files
+        )
+        
+        # Get storage analysis
+        storage_analysis = await analyze_storage_usage()
+        
+        # Preview orphaned file cleanup
+        orphaned_preview = await cleanup_orphaned_files(confirm=False)
+        
+        # Preview temp file cleanup
+        temp_preview = await cleanup_old_temp_files(days_old=7, confirm=False)
+        
+        return {
+            "storage_analysis": storage_analysis,
+            "orphaned_files_preview": orphaned_preview,
+            "temp_files_preview": temp_preview,
+            "total_potential_savings_mb": (
+                orphaned_preview.get("total_size_mb", 0) + 
+                temp_preview.get("total_size_mb", 0)
+            )
+        }
+        
+    except Exception as e:
+        logger.error(f"Error previewing cleanup operations: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to preview cleanup: {str(e)}") 

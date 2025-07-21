@@ -42,6 +42,15 @@ ENVIRONMENT=development              # Options: "development" or "production"
 LOG_LEVEL=INFO                      # Logging level: DEBUG, INFO, WARNING, ERROR
 
 # =============================================================================
+# INSTAGRAM DOWNLOADER CONFIGURATION
+# =============================================================================
+# Instagram credentials for downloading private posts and avoiding rate limits
+# Optional: Only needed for private posts or when encountering authentication errors
+INSTAGRAM_USERNAME=your-instagram-username
+INSTAGRAM_PASSWORD=your-instagram-password
+
+
+# =============================================================================
 # DOCKER CONFIGURATION (for development)
 # =============================================================================
 # These are automatically set by docker-compose.yml
