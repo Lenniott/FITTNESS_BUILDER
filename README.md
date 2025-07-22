@@ -105,8 +105,8 @@ app/
 curl -X POST http://localhost:8000/api/v1/process \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://www.instagram.com/p/CxYz123ABC/",
-    "background": false
+    "url": "https://www.instagram.com/reel/DMFxTuTx4yQ/?igsh=MWJvd3ZwZTZxaGlibQ%3D%3D",
+    "background": true
   }'
 ```
 
