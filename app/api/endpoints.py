@@ -4,11 +4,11 @@ API endpoints for the video processing service.
 
 import logging
 from typing import Dict, List, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Path
 from pydantic import BaseModel, HttpUrl
 import asyncio
 import os
-from pathlib import Path
+from pathlib import Path as FilePath  # Use FilePath for filesystem paths
 import uuid
 import subprocess
 
@@ -20,6 +20,7 @@ from app.database.operations import (
 from app.database.vectorization import (
     search_similar_exercises, get_collection_info, init_vector_store
 )
+from app.database.job_status import create_job, update_job_status, get_job_status
 
 logger = logging.getLogger(__name__)
 
@@ -69,45 +70,40 @@ class SearchRequest(BaseModel):
     intensity_max: Optional[int] = None
     limit: int = 50
 
-@router.post("/process", response_model=ProcessResponse)
+@router.post("/process")
 async def process_video(request: ProcessRequest, background_tasks: BackgroundTasks):
     """
     Process video URL to extract exercise clips.
-    
-    This endpoint follows the complete workflow:
-    1. Download video and extract metadata
-    2. Transcribe audio
-    3. Extract keyframes
-    4. AI exercise detection
-    5. Generate clips
-    6. Store in database
+    If background=True, start job in background and return job_id for polling.
     """
     try:
         logger.info(f"Processing video: {request.url}")
-        
-        # Initialize databases if needed
         await init_database()
         await init_vector_store()
-        
         if request.background:
-            # Process in background
-            background_tasks.add_task(processor.process_video, str(request.url))
-            return ProcessResponse(
-                success=True,
-                processed_clips=[],
-                total_clips=0,
-                processing_time=0.0,
-                temp_dir=None
-            )
+            # Generate job ID and create job record
+            job_id = str(uuid.uuid4())
+            await create_job(job_id)
+            # Start background processing with job_id
+            background_tasks.add_task(processor.process_video, str(request.url), job_id)
+            return {"success": True, "processed_clips": [], "total_clips": 0, "processing_time": 0.0, "temp_dir": None, "job_id": job_id}
         else:
-            # Process synchronously
             result = await processor.process_video(str(request.url))
             return ProcessResponse(**result)
-            
     except Exception as e:
         error_msg = escape_error_message(e)
         logger.error(f"Error processing video: {error_msg}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {error_msg}")
+
+@router.get("/job-status/{job_id}")
+async def job_status(job_id: str = Path(..., description="Job ID to check status for")):
+    """
+    Poll for background job status/result by job ID.
+    """
+    job = await get_job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 @router.get("/exercises", response_model=List[ExerciseResponse])
 async def get_exercises(url: Optional[str] = Query(None, description="Filter by video URL")):
@@ -212,7 +208,7 @@ async def delete_all_exercises():
         
         # Delete all clip files
         clips_deleted = 0
-        clips_dir = Path("storage/clips")
+        clips_dir = FilePath("storage/clips")
         if clips_dir.exists():
             for clip_file in clips_dir.glob("*.mp4"):
                 try:
@@ -482,7 +478,7 @@ async def generate_clip_from_database(exercise_id: str):
         video_path = exercise.get('video_path', '')
         if not video_path or not os.path.exists(video_path):
             # Try to find the original video in temp directories
-            temp_dirs = [d for d in Path("app/temp").iterdir() if d.is_dir() and d.name.startswith("gilgamesh_download_")]
+            temp_dirs = [d for d in FilePath("app/temp").iterdir() if d.is_dir() and d.name.startswith("gilgamesh_download_")]
             video_file = None
             for temp_dir in temp_dirs:
                 video_files = list(temp_dir.glob("*.mp4"))
@@ -501,7 +497,7 @@ async def generate_clip_from_database(exercise_id: str):
         duration = end_time - start_time
         
         # Create clips directory
-        clips_dir = Path("storage/clips")
+        clips_dir = FilePath("storage/clips")
         clips_dir.mkdir(parents=True, exist_ok=True)
         
         # Generate clip filename

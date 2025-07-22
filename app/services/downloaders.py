@@ -27,7 +27,7 @@ async def download_media_and_metadata(url: str) -> Dict:
         Dict containing files, tags, description, source, temp_dir, and link
     """
     # Create unique temporary directory
-    temp_dir = tempfile.mkdtemp(prefix="gilgamesh_download_", dir="app/temp")
+    temp_dir = tempfile.mkdtemp(prefix="gilgamesh_download_", dir="storage/temp")
     
     try:
         # Determine source and delegate to appropriate downloader

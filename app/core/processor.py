@@ -33,6 +33,7 @@ from app.database.operations import store_exercise, check_existing_processing
 from app.database.vectorization import store_embedding
 from app.utils.url_processor import extract_carousel_info
 from app.utils.enhanced_keyframe_extraction import enhanced_keyframe_extractor
+from app.database.job_status import update_job_status
 
 logger = logging.getLogger(__name__)
 
@@ -92,20 +93,16 @@ class VideoProcessor:
         
         return self.gemini_model
         
-    async def process_video(self, url: str) -> Dict:
+    async def process_video(self, url: str, job_id: Optional[str] = None) -> Dict:
         """
         Complete video processing pipeline.
-        
-        Args:
-            url: Video URL to process
-            
-        Returns:
-            Dict with processing results
+        If job_id is provided, update job status as the job progresses.
         """
         start_time = time.time()
         temp_dir = None
-        
         try:
+            if job_id is not None:
+                await update_job_status(job_id, 'in_progress')
             # Extract carousel information
             normalized_url, carousel_index = extract_carousel_info(url)
             logger.info(f"Processing URL: {url} -> normalized: {normalized_url}, carousel_index: {carousel_index}")
@@ -212,18 +209,23 @@ This is video {i+1} of {carousel_count} in an Instagram carousel.
             
             processing_time = time.time() - start_time
             
-            return {
+            result = {
                 "success": True,
                 "processed_clips": all_stored_exercises,
                 "total_clips": len(all_stored_exercises),
                 "processing_time": processing_time,
                 "temp_dir": temp_dir
             }
+            if job_id is not None:
+                await update_job_status(job_id, 'done', result)
+            return result
             
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}")
             if temp_dir and os.path.exists(temp_dir):
                 await self._cleanup_temp_files(temp_dir)
+            if job_id is not None:
+                await update_job_status(job_id, 'failed', {"error": str(e)})
             raise
     
     async def _detect_exercises(self, video_file: str, transcript: List[Dict], 
