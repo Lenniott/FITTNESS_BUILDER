@@ -100,37 +100,79 @@ app/
 - Instagram: `https://www.instagram.com/p/POST_ID/`
 - TikTok: `https://www.tiktok.com/@user/video/VIDEO_ID`
 
-**Request**:
+**Request (Synchronous):**
 ```bash
 curl -X POST http://localhost:8000/api/v1/process \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://www.instagram.com/reel/DMFxTuTx4yQ/?igsh=MWJvd3ZwZTZxaGlibQ%3D%3D",
+    "url": "https://www.instagram.com/p/CxYz123ABC/",
+    "background": false
+  }'
+```
+
+**Request (Background/Asynchronous):**
+```bash
+curl -X POST http://localhost:8000/api/v1/process \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.instagram.com/p/CxYz123ABC/",
     "background": true
   }'
 ```
 
-**Response**:
+**Response (Background):**
 ```json
 {
   "success": true,
-  "processed_clips": [
-    {
-      "exercise_name": "Push-ups",
-      "start_time": 5.2,
-      "end_time": 15.8,
-      "clip_path": "/app/storage/clips/push_ups_001.mp4",
-      "how_to": "Start in plank position...",
-      "benefits": "Strengthens chest, shoulders, and triceps",
-      "fitness_level": 5,
-      "intensity": 7
-    }
-  ],
-  "total_clips": 1,
-  "processing_time": 45.2,
-  "temp_dir": "/app/app/temp/gilgamesh_download_abc123"
+  "processed_clips": [],
+  "total_clips": 0,
+  "processing_time": 0.0,
+  "temp_dir": null,
+  "job_id": "e513927a-2f60-4ead-b3e6-fa9597f50066"
 }
 ```
+
+### Poll for Job Status
+
+**Endpoint**: `GET /api/v1/job-status/{job_id}`
+
+**Request:**
+```bash
+curl http://localhost:8000/api/v1/job-status/e513927a-2f60-4ead-b3e6-fa9597f50066
+```
+
+**Possible Responses:**
+- **In Progress:**
+  ```json
+  {
+    "status": "in_progress",
+    "result": null
+  }
+  ```
+- **Done:**
+  ```json
+  {
+    "status": "done",
+    "result": {
+      "success": true,
+      "processed_clips": [...],
+      "total_clips": 1,
+      "processing_time": 45.2,
+      "temp_dir": "storage/temp/gilgamesh_download_abc123"
+    }
+  }
+  ```
+- **Failed:**
+  ```json
+  {
+    "status": "failed",
+    "result": {
+      "error": "Some error message"
+    }
+  }
+  ```
+
+---
 
 ### List All Exercises
 
