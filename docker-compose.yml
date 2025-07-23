@@ -22,7 +22,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - fitness_storage:/app/storage
-      - fitness_temp:/app/app/temp
+      - fitness_temp:/app/storage/temp
     restart: unless-stopped
     networks:
       - fitness_network
