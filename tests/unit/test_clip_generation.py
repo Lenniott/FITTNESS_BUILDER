@@ -17,7 +17,7 @@ def test_clip_generation():
     """Test clip generation using the latest AI response."""
     
     # Find the latest temp directory
-    temp_dir = Path("app/temp")
+    temp_dir = Path("storage/temp")
     if not temp_dir.exists():
         print("❌ No temp directory found")
         return

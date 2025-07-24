@@ -50,7 +50,7 @@ async def test_downloader():
 
 if __name__ == "__main__":
     # Ensure temp directory exists
-    os.makedirs("app/temp", exist_ok=True)
+    os.makedirs("storage/temp", exist_ok=True)
     
     # Run the test
     asyncio.run(test_downloader()) 

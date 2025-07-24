@@ -26,7 +26,7 @@ async def test_improved_deduplication():
         return
     
     # Create a test frames directory
-    frames_dir = "app/temp/test_improved_deduplication_frames"
+    frames_dir = "storage/temp/test_improved_deduplication_frames"
     os.makedirs(frames_dir, exist_ok=True)
     
     print(f"📹 Testing with video: {video_file}")

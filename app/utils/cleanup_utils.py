@@ -22,7 +22,7 @@ async def analyze_storage_usage() -> Dict:
         # Try container paths first, then fall back to local paths
         clips_dir = Path("/app/storage/clips")
         compiled_dir = Path("/app/storage/compiled_workouts")
-        temp_dir = Path("/app/app/temp")
+        temp_dir = Path("/app/storage/temp")
         
         # If container paths don't exist, try local paths
         if not clips_dir.exists():
@@ -30,7 +30,7 @@ async def analyze_storage_usage() -> Dict:
         if not compiled_dir.exists():
             compiled_dir = Path("storage/compiled_workouts")
         if not temp_dir.exists():
-            temp_dir = Path("app/temp")
+            temp_dir = Path("storage/temp")
         
         clips_info = await _analyze_directory(clips_dir, "*.mp4")
         compiled_info = await _analyze_directory(compiled_dir, "*.mp4")
@@ -215,9 +215,9 @@ async def cleanup_old_temp_files(days_old: int = 7, confirm: bool = False, inclu
     """
     try:
         # Try container path first, then fall back to local path
-        temp_dir = Path("/app/app/temp")
+        temp_dir = Path("/app/storage/temp")
         if not temp_dir.exists():
-            temp_dir = Path("app/temp")
+            temp_dir = Path("storage/temp")
         
         if not temp_dir.exists():
             return {"message": "Temp directory does not exist"}
