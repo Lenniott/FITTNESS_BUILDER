@@ -346,3 +346,4 @@ CREATE TABLE compiled_workouts (
 ### Fixed
 - Robust handling of string/invalid `start_time` and `end_time` in exercise clip generation (`app/core/processor.py`).
 - The pipeline now skips and logs exercises with invalid or non-numeric times, preventing crashes from AI output.
+- FIX: Always ensure 'storage/temp' exists before creating temp dirs to prevent FileNotFoundError in downloaders.py.

@@ -1,29 +1,46 @@
 import logging
 from typing import Optional, Dict, Any
+import asyncpg
+import json
+from app.database.operations import get_database_connection
 
 logger = logging.getLogger(__name__)
 
-# In-memory job store for prototyping
-_job_store: Dict[str, Dict[str, Any]] = {}
-
 async def create_job(job_id: str):
-    """Create a new job record with 'pending' status."""
-    _job_store[job_id] = {
-        'status': 'pending',
-        'result': None
-    }
-    logger.info(f"Created job {job_id} with status 'pending'")
+    pool = await get_database_connection()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO exercise_job_status (job_id, status, created_at, updated_at)
+            VALUES ($1, 'pending', NOW(), NOW())
+            ON CONFLICT (job_id) DO NOTHING
+            """,
+            job_id
+        )
+        logger.info(f"Created job {job_id} with status 'pending'")
 
 async def update_job_status(job_id: str, status: str, result: Optional[Any] = None):
-    """Update job status and optionally result."""
-    if job_id in _job_store:
-        _job_store[job_id]['status'] = status
-        if result is not None:
-            _job_store[job_id]['result'] = result
+    pool = await get_database_connection()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE exercise_job_status
+            SET status = $2,
+                result = $3,
+                updated_at = NOW()
+            WHERE job_id = $1
+            """,
+            job_id, status, json.dumps(result) if result is not None else None
+        )
         logger.info(f"Updated job {job_id} to status '{status}'")
-    else:
-        logger.warning(f"Tried to update non-existent job {job_id}")
 
 async def get_job_status(job_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve job status and result by job ID."""
-    return _job_store.get(job_id) 
+    pool = await get_database_connection()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, result FROM exercise_job_status WHERE job_id = $1",
+            job_id
+        )
+        if row:
+            return {"status": row["status"], "result": row["result"]}
+        return None 
