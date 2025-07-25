@@ -347,3 +347,5 @@ CREATE TABLE compiled_workouts (
 - Robust handling of string/invalid `start_time` and `end_time` in exercise clip generation (`app/core/processor.py`).
 - The pipeline now skips and logs exercises with invalid or non-numeric times, preventing crashes from AI output.
 - FIX: Always ensure 'storage/temp' exists before creating temp dirs to prevent FileNotFoundError in downloaders.py.
+
+- Updated asyncpg.create_pool in app/database/operations.py to include max_inactive_connection_lifetime=60. This improves reliability for long-running jobs by ensuring dropped/idle connections are detected and replaced automatically.

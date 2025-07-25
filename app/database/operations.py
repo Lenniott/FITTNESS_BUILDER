@@ -29,7 +29,8 @@ async def get_database_connection():
             password=os.getenv("PG_PASSWORD", ""),
             database=os.getenv("PG_DBNAME", "gilgamesh"),
             min_size=1,
-            max_size=10
+            max_size=10,
+            max_inactive_connection_lifetime=60
         )
     return _pool
 
