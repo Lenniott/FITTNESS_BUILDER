@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Gemini Model Compatibility**: Updated Gemini model names from deprecated `gemini-pro` to current `gemini-2.5-flash`
+  - Fixed `app/core/exercise_story_generator.py` to use `gemini-2.5-flash` model
+  - Fixed `app/core/exercise_selector.py` to use `gemini-2.5-flash` model
+  - Added error handling and fallback responses for API failures
+  - Resolved 404 model not found errors in RAG demo
+  - Demo now successfully generates exercise stories and retrieves similar exercises from vector database
+
+- **Exercise Diversity Enhancement**: Improved vector search to provide more diverse exercise recommendations
+  - Added `search_diverse_exercises()` function with intelligent deduplication
+  - Implemented exercise type categorization (handstand, stretch, core, push, hip_leg, balance, wall, floor)
+  - Added keyword-based similarity detection to prevent clustering of similar movements
+  - Increased initial candidate pool from 20 to 40 with lower score threshold (0.3)
+  - Limited similar exercise types to maximum 2 per story for better variety
+  - Results now show diverse movement patterns instead of clustered similar exercises
+
+### Added
+- **Phase 1: Database & Core Structure Implementation**
+  - **New Database Table**: `workout_routines` for JSON-based routine storage
+  - **Database Operations**: Complete CRUD operations for routines in `app/database/routine_operations.py`
+  - **Core Compiler Structure**: Basic routine compiler in `app/core/routine_compiler.py`
+  - **JSON Generation**: Basic JSON routine structure with complete metadata
+  - **Database Migration**: SQL migration file for new table creation
+  - **Unit Tests**: Comprehensive testing for database operations
+  - **Integration Tests**: Basic routine compilation testing
+  - **Individual Exercise Deletion**: Added `remove_exercise_from_routine()` and `delete_exercise_from_routine_and_system()` functions
+  - **Complete Deletion System**: Full cascade cleanup for exercises from routines, database, and vector store
+
+- **Phase 2: API Endpoints Implementation**
+  - **New Routine Endpoints**: Complete REST API for JSON-based routine generation
+  - **Pydantic Models**: Comprehensive request/response models for type safety in `app/api/routine_models.py`
+  - **Routine Generation**: `POST /api/v1/routine/generate` endpoint with natural language input
+  - **Routine Management**: Complete CRUD operations for routines
+  - **Exercise Removal**: Remove exercises from routines with optional deletion
+  - **Status Endpoint**: Get routine status and metadata
+  - **Integration Tests**: Comprehensive API testing with 11 test cases
+  - **Error Handling**: Robust error handling and validation
+  - **API Documentation**: Complete endpoint documentation with FastAPI auto-docs
+
+- **Phase 3: Intelligent Selection Implementation**
+  - **Natural Language Understanding**: Pure content-based exercise selection without hardcoded biases
+  - **Intelligent Exercise Selector**: `app/core/exercise_selector.py` with second LLM for routine curation
+  - **Content Similarity Analysis**: Avoids duplicates based on movement patterns, not just IDs
+  - **Thoughtful Routine Curation**: Creates well-rounded routines with logical progression
+  - **Comprehensive Context**: Second LLM analyzes exercise stories, clip details, and user requirements
+  - **Duration Optimization**: Smart selection that respects target duration while maintaining quality
+  - **Fallback System**: Graceful degradation when LLM fails
+  - **Unit Tests**: Comprehensive testing for exercise selector with 9 test cases
+  - **Integration**: Seamless integration with existing routine compiler
+  - **No Hardcoded Biases**: Removes all basic exercise knowledge from code, lets content speak
+
 ### Changed
 - **Simplified Instagram Downloader**: Removed complex carousel handling logic
   - **URL Sanitization**: Automatically removes query parameters like `img_index` from Instagram URLs
