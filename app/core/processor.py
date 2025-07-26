@@ -204,7 +204,9 @@ This is video {i+1} of {carousel_count} in an Instagram carousel.
                 
                 # Step 6: Store in database for this video
                 logger.info(f"Storing exercises in database for {os.path.basename(video_file)}...")
-                stored_exercises = await self._store_exercises(url, normalized_url, carousel_index, clips)
+                # Use the actual carousel index for this file (i+1) instead of the URL-derived index
+                actual_carousel_index = i + 1
+                stored_exercises = await self._store_exercises(url, normalized_url, actual_carousel_index, clips)
                 all_stored_exercises.extend(stored_exercises)
             
             processing_time = time.time() - start_time
@@ -388,6 +390,7 @@ For valid frames:
 For each exercise, you must provide a clear, actionable recommendation for `rounds_reps`:
 - If the video does not specify, use your expertise to recommend a typical rep/round scheme for this movement, as a fitness instructor would (e.g., "Perform 10-12 controlled reps per side, resting 30 seconds between sets." or "Complete 3 rounds of 45 seconds each, focusing on form.").
 - Never leave this field vague or empty—always provide a clear, actionable recommendation.
+- Never reference the video when describing how to perform the exercise.
 
 Provide final results in this format (use numbers for start_time and end_time):
 

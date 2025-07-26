@@ -175,6 +175,75 @@ async def search_similar_exercises(
         logger.error(f"Error searching similar exercises: {str(e)}")
         return []
 
+async def search_diverse_exercises(
+    query: str,
+    target_count: int = 5,
+    initial_limit: int = 30,
+    score_threshold: float = 0.4
+) -> List[Dict]:
+    """
+    Search for diverse exercises by retrieving more candidates and removing duplicates.
+    
+    Args:
+        query: Search query
+        target_count: Number of diverse exercises to return
+        initial_limit: Initial number of candidates to retrieve
+        score_threshold: Minimum similarity score for initial retrieval
+        
+    Returns:
+        List of diverse exercises with scores
+    """
+    try:
+        # Get more candidates initially with lower threshold
+        candidates = await search_similar_exercises(query, limit=initial_limit, score_threshold=score_threshold)
+        
+        if not candidates:
+            return []
+        
+        # Deduplicate based on exercise names and content similarity
+        diverse_exercises = []
+        seen_names = set()
+        seen_keywords = set()
+        seen_exercise_types = set()
+        
+        for candidate in candidates:
+            metadata = candidate['metadata']
+            exercise_name = metadata.get('exercise_name', '').lower()
+            
+            # Skip if we've seen this exact exercise name
+            if exercise_name in seen_names:
+                continue
+            
+            # Extract key movement keywords from exercise name
+            keywords = _extract_movement_keywords(exercise_name)
+            exercise_type = _categorize_exercise_type(exercise_name)
+            
+            # Skip if we've seen too many similar movement patterns
+            similar_keywords = _count_similar_keywords(keywords, seen_keywords)
+            if similar_keywords > 1:  # Reduced from 2 to 1 for more diversity
+                continue
+            
+            # Skip if we have too many of the same exercise type
+            if exercise_type in seen_exercise_types and len([e for e in diverse_exercises if _categorize_exercise_type(e['metadata'].get('exercise_name', '').lower()) == exercise_type]) >= 2:
+                continue
+            
+            # Add to diverse set
+            diverse_exercises.append(candidate)
+            seen_names.add(exercise_name)
+            seen_keywords.update(keywords)
+            seen_exercise_types.add(exercise_type)
+            
+            # Stop when we have enough diverse exercises
+            if len(diverse_exercises) >= target_count:
+                break
+        
+        logger.info(f"Found {len(diverse_exercises)} diverse exercises from {len(candidates)} candidates for query: {query}")
+        return diverse_exercises
+        
+    except Exception as e:
+        logger.error(f"Error searching diverse exercises: {str(e)}")
+        return []
+
 async def delete_embedding(point_id: str) -> bool:
     """
     Delete embedding from Qdrant.
@@ -297,3 +366,223 @@ async def get_collection_info() -> Dict:
     except Exception as e:
         logger.error(f"Error getting collection info: {str(e)}")
         return {}
+
+async def enrich_vector_results_with_database_data(vector_results: List[Dict]) -> List[Dict]:
+    """
+    Enrich vector search results with complete database data from PostgreSQL.
+    
+    Args:
+        vector_results: List of results from vector search with metadata
+        
+    Returns:
+        List of enriched results with complete database data
+    """
+    try:
+        from app.database.operations import get_database_connection
+        
+        if not vector_results:
+            return []
+        
+        # Get database connection
+        pool = await get_database_connection()
+        
+        # Extract qdrant_ids from vector results
+        qdrant_ids = [result['metadata'].get('qdrant_id') for result in vector_results if result['metadata'].get('qdrant_id')]
+        
+        logger.info(f"Found {len(qdrant_ids)} qdrant_ids in vector results: {qdrant_ids[:3]}...")
+        
+        if not qdrant_ids:
+            logger.warning("No qdrant_ids found in vector results")
+            return vector_results
+        
+        # Query database for complete exercise data using qdrant_id
+        async with pool.acquire() as conn:
+            # Use parameterized query to avoid SQL injection
+            placeholders = ','.join([f'${i+1}' for i in range(len(qdrant_ids))])
+            query = f"""
+                SELECT 
+                    id,
+                    url,
+                    normalized_url,
+                    carousel_index,
+                    exercise_name,
+                    video_path,
+                    start_time,
+                    end_time,
+                    how_to,
+                    benefits,
+                    counteracts,
+                    fitness_level,
+                    rounds_reps,
+                    intensity,
+                    qdrant_id,
+                    created_at
+                FROM exercises 
+                WHERE qdrant_id = ANY($1)
+            """
+            
+            logger.info(f"Executing query with qdrant_ids: {qdrant_ids[:3]}...")
+            rows = await conn.fetch(query, qdrant_ids)
+            logger.info(f"Found {len(rows)} matching database records")
+            
+            if rows:
+                logger.info(f"Sample row: {dict(rows[0])}")
+            
+            # Create lookup dictionary using qdrant_id as key
+            db_data_lookup = {str(row['qdrant_id']): dict(row) for row in rows}
+            logger.info(f"Lookup keys: {list(db_data_lookup.keys())[:3]}...")
+        
+        # Enrich vector results with database data
+        enriched_results = []
+        for vector_result in vector_results:
+            qdrant_id = vector_result['metadata'].get('qdrant_id')
+            db_data = db_data_lookup.get(qdrant_id, {})
+            
+            # Merge vector metadata with database data
+            enriched_metadata = {
+                **vector_result['metadata'],  # Vector metadata (includes qdrant_id, video_path, etc.)
+                **db_data,  # Database data (includes id, url, created_at, etc.)
+            }
+            
+            enriched_result = {
+                'id': vector_result['id'],
+                'score': vector_result['score'],
+                'metadata': enriched_metadata,
+                'database_id': db_data.get('id'),
+                'url': db_data.get('url'),
+                'normalized_url': db_data.get('normalized_url'),
+                'carousel_index': db_data.get('carousel_index'),
+                'exercise_name': db_data.get('exercise_name') or vector_result['metadata'].get('exercise_name'),
+                'video_path': db_data.get('video_path') or vector_result['metadata'].get('video_path'),
+                'start_time': db_data.get('start_time') or vector_result['metadata'].get('start_time'),
+                'end_time': db_data.get('end_time') or vector_result['metadata'].get('end_time'),
+                'how_to': db_data.get('how_to') or vector_result['metadata'].get('how_to'),
+                'benefits': db_data.get('benefits') or vector_result['metadata'].get('benefits'),
+                'counteracts': db_data.get('counteracts') or vector_result['metadata'].get('counteracts'),
+                'fitness_level': db_data.get('fitness_level') or vector_result['metadata'].get('fitness_level'),
+                'rounds_reps': db_data.get('rounds_reps') or vector_result['metadata'].get('rounds_reps'),
+                'intensity': db_data.get('intensity') or vector_result['metadata'].get('intensity'),
+                'created_at': db_data.get('created_at'),
+                'qdrant_id': qdrant_id
+            }
+            
+            enriched_results.append(enriched_result)
+        
+        logger.info(f"Enriched {len(enriched_results)} vector results with database data")
+        return enriched_results
+        
+    except Exception as e:
+        logger.error(f"Error enriching vector results with database data: {str(e)}")
+        # Return original results if enrichment fails
+        return vector_results
+
+async def search_diverse_exercises_with_database_data(
+    query: str,
+    target_count: int = 5,
+    initial_limit: int = 30,
+    score_threshold: float = 0.4
+) -> List[Dict]:
+    """
+    Search for diverse exercises and enrich with complete database data.
+    
+    Args:
+        query: Search query
+        target_count: Number of diverse exercises to return
+        initial_limit: Initial number of candidates to retrieve
+        score_threshold: Minimum similarity score for initial retrieval
+        
+    Returns:
+        List of diverse exercises with complete database data
+    """
+    try:
+        # Get diverse exercises from vector search
+        diverse_exercises = await search_diverse_exercises(
+            query, target_count, initial_limit, score_threshold
+        )
+        
+        # Enrich with database data
+        enriched_exercises = await enrich_vector_results_with_database_data(diverse_exercises)
+        
+        return enriched_exercises
+        
+    except Exception as e:
+        logger.error(f"Error in search_diverse_exercises_with_database_data: {str(e)}")
+        return []
+
+def _extract_movement_keywords(exercise_name: str) -> set:
+    """Extract key movement keywords from exercise name."""
+    # Common movement patterns to identify
+    movement_patterns = {
+        'stretch', 'flexor', 'bridge', 'plank', 'sit', 'push', 'pull', 'hold',
+        'lunge', 'squat', 'deadlift', 'press', 'row', 'curl', 'extension',
+        'rotation', 'twist', 'bend', 'reach', 'lift', 'lower', 'raise',
+        'handstand', 'headstand', 'cartwheel', 'split', 'bridge', 'wheel',
+        'wall', 'floor', 'standing', 'kneeling', 'lying', 'seated'
+    }
+    
+    words = exercise_name.split()
+    keywords = set()
+    
+    for word in words:
+        # Clean the word
+        clean_word = word.lower().strip('()[]{}.,!?')
+        if clean_word in movement_patterns:
+            keywords.add(clean_word)
+    
+    return keywords
+
+def _count_similar_keywords(new_keywords: set, seen_keywords: set) -> int:
+    """Count how many keywords are similar to already seen ones."""
+    if not seen_keywords:
+        return 0
+    
+    # Count overlapping keywords
+    overlap = len(new_keywords.intersection(seen_keywords))
+    
+    # Also count similar movement patterns
+    similar_patterns = 0
+    for new_key in new_keywords:
+        for seen_key in seen_keywords:
+            # Check for similar movement patterns
+            if (new_key in seen_key or seen_key in new_key) and len(new_key) > 3:
+                similar_patterns += 1
+    
+    return overlap + similar_patterns
+
+def _categorize_exercise_type(exercise_name: str) -> str:
+    """Categorize exercise into broad types for better deduplication."""
+    exercise_name_lower = exercise_name.lower()
+    
+    # Handstand variations
+    if any(word in exercise_name_lower for word in ['handstand', 'headstand', 'inverted']):
+        return 'handstand'
+    
+    # Stretching/mobility
+    if any(word in exercise_name_lower for word in ['stretch', 'flexor', 'mobility', 'opener']):
+        return 'stretch'
+    
+    # Core exercises
+    if any(word in exercise_name_lower for word in ['hollow', 'plank', 'crunch', 'sit-up', 'core']):
+        return 'core'
+    
+    # Push exercises
+    if any(word in exercise_name_lower for word in ['push', 'press', 'dip']):
+        return 'push'
+    
+    # Hip/leg exercises
+    if any(word in exercise_name_lower for word in ['hip', 'lunge', 'squat', 'leg']):
+        return 'hip_leg'
+    
+    # Balance/stability
+    if any(word in exercise_name_lower for word in ['balance', 'stability', 'hold', 'stand']):
+        return 'balance'
+    
+    # Wall exercises
+    if 'wall' in exercise_name_lower:
+        return 'wall'
+    
+    # Floor exercises
+    if any(word in exercise_name_lower for word in ['floor', 'lying', 'seated', 'kneeling']):
+        return 'floor'
+    
+    return 'other'

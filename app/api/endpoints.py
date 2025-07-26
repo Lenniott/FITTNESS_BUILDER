@@ -3,9 +3,10 @@ API endpoints for the video processing service.
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Path
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, field_validator
+import uuid
 import asyncio
 import os
 from pathlib import Path as FilePath  # Use FilePath for filesystem paths
@@ -15,12 +16,15 @@ import subprocess
 from app.core.processor import processor
 from app.database.operations import (
     get_exercises_by_url, get_exercise_by_id, search_exercises,
-    delete_exercise, init_database
+    delete_exercise, init_database, store_workout_routine, get_workout_routine
 )
 from app.database.vectorization import (
-    search_similar_exercises, get_collection_info, init_vector_store
+    search_similar_exercises, get_collection_info, init_vector_store,
+    search_diverse_exercises_with_database_data
 )
 from app.database.job_status import create_job, update_job_status, get_job_status
+from app.core.exercise_story_generator import generate_exercise_stories
+from app.core.exercise_selector import exercise_selector
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,13 @@ from app.api.compilation_endpoints import router as compilation_router
 class ProcessRequest(BaseModel):
     url: HttpUrl
     background: bool = False
+    
+    @field_validator('background', mode='before')
+    @classmethod
+    def convert_string_to_bool(cls, v):
+        if isinstance(v, str):
+            return v.lower() == 'true'
+        return v
 
 class ProcessResponse(BaseModel):
     success: bool
@@ -57,7 +68,15 @@ class ExerciseResponse(BaseModel):
     fitness_level: int
     rounds_reps: str
     intensity: int
+    qdrant_id: Optional[str] = None
     created_at: str
+    
+    @field_validator('qdrant_id', mode='before')
+    @classmethod
+    def convert_uuid_to_string(cls, v):
+        if v is not None:
+            return str(v)
+        return v
     
     class Config:
         from_attributes = True
@@ -69,6 +88,42 @@ class SearchRequest(BaseModel):
     intensity_min: Optional[int] = None
     intensity_max: Optional[int] = None
     limit: int = 50
+
+class RAGPipelineRequest(BaseModel):
+    user_prompt: str
+    target_duration: Optional[int] = None
+    intensity_level: str = "moderate"
+    exercises_per_story: int = 3
+    initial_limit: int = 40
+    score_threshold: float = 0.3
+
+class ExerciseInRoutine(BaseModel):
+    order: int
+    exercise_name: str
+    how_to: str
+    benefits: str
+    counteracts: str
+    fitness_level: int
+    rounds_reps: str
+    intensity: int
+
+class RoutineMetadata(BaseModel):
+    total_exercises: int
+    database_operations: Dict[str, List[str]]
+
+class RoutineResponse(BaseModel):
+    exercises: List[ExerciseInRoutine]
+    metadata: RoutineMetadata
+
+class RAGPipelineResponse(BaseModel):
+    success: bool
+    routine_id: str
+    routine: RoutineResponse
+    user_requirements: str
+    target_duration: int
+    intensity_level: str
+    created_at: str
+    processing_time: float
 
 @router.post("/process")
 async def process_video(request: ProcessRequest, background_tasks: BackgroundTasks):
@@ -94,6 +149,188 @@ async def process_video(request: ProcessRequest, background_tasks: BackgroundTas
         error_msg = escape_error_message(e)
         logger.error(f"Error processing video: {error_msg}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {error_msg}")
+
+@router.post("/generate-routine", response_model=RAGPipelineResponse)
+async def generate_workout_routine(request: RAGPipelineRequest):
+    """
+    Generate a complete workout routine using the RAG pipeline.
+    
+    This endpoint performs the complete workflow:
+    1. Generate exercise stories from user prompt
+    2. Search for diverse exercises for each story
+    3. Select and order exercises for routine
+    4. Create final JSON structure
+    5. Store routine in database
+    
+    Args:
+        user_prompt: The user's fitness requirements/goals
+        target_duration: Target duration in seconds (optional, auto-calculated if not provided)
+        intensity_level: Desired intensity (low/moderate/high)
+        exercises_per_story: Number of exercises to find per story
+        initial_limit: Initial search limit for vector search
+        score_threshold: Minimum similarity score for vector search
+        
+    Returns:
+        Complete routine with exercises and metadata
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        logger.info(f"Starting RAG pipeline for user prompt: {request.user_prompt}")
+        
+        # Initialize databases
+        await init_database()
+        await init_vector_store()
+        
+        # Step 1: Generate exercise stories
+        logger.info("Step 1: Generating exercise stories...")
+        stories = generate_exercise_stories(request.user_prompt)
+        logger.info(f"Generated {len(stories)} exercise stories")
+        
+        # Step 2: Search for exercises for each story
+        logger.info("Step 2: Searching for exercises for each story...")
+        all_exercise_results = []
+        
+        for i, story in enumerate(stories, 1):
+            logger.info(f"Searching for story {i}: {story[:50]}...")
+            results = await search_diverse_exercises_with_database_data(
+                story, 
+                target_count=request.exercises_per_story,
+                initial_limit=request.initial_limit,
+                score_threshold=request.score_threshold
+            )
+            logger.info(f"Found {len(results)} exercises for story {i}")
+            all_exercise_results.extend(results)
+        
+        logger.info(f"Total exercises found: {len(all_exercise_results)}")
+        
+        # Step 3: Select and order exercises for routine
+        logger.info("Step 3: Selecting and ordering exercises for routine...")
+        selected_database_ids = await exercise_selector.select_routine_from_stories_and_results(
+            original_prompt=request.user_prompt,
+            exercise_stories=stories,
+            exercise_results=all_exercise_results
+        )
+        
+        logger.info(f"Selected {len(selected_database_ids)} exercises for routine")
+        
+        # Step 4: Create final JSON structure
+        logger.info("Step 4: Creating final JSON structure...")
+        final_routine_json = await exercise_selector.create_final_routine_json(
+            selected_database_ids=selected_database_ids,
+            exercise_results=all_exercise_results
+        )
+        
+        # Step 5: Store routine in database
+        logger.info("Step 5: Storing routine in database...")
+        routine_id = await store_workout_routine(
+            user_requirements=request.user_prompt,
+            routine_json=final_routine_json,
+            target_duration=request.target_duration,
+            intensity_level=request.intensity_level
+        )
+        
+        # Step 6: Retrieve stored routine for response
+        stored_routine = await get_workout_routine(routine_id)
+        
+        if not stored_routine:
+            raise HTTPException(status_code=500, detail="Failed to retrieve stored routine")
+        
+        # Calculate processing time
+        processing_time = time.time() - start_time
+        
+        # Convert stored routine to response format
+        routine_data = stored_routine['routine_data']['routine']
+        
+        # Convert exercises to response format
+        exercises = []
+        for exercise in routine_data['exercises']:
+            exercises.append(ExerciseInRoutine(**exercise))
+        
+        # Create metadata
+        metadata = RoutineMetadata(**routine_data['metadata'])
+        
+        # Create routine response
+        routine_response = RoutineResponse(
+            exercises=exercises,
+            metadata=metadata
+        )
+        
+        # Create final response
+        response = RAGPipelineResponse(
+            success=True,
+            routine_id=routine_id,
+            routine=routine_response,
+            user_requirements=stored_routine['user_requirements'],
+            target_duration=stored_routine['target_duration'],
+            intensity_level=stored_routine['intensity_level'],
+            created_at=str(stored_routine['created_at']),
+            processing_time=processing_time
+        )
+        
+        logger.info(f"RAG pipeline completed successfully in {processing_time:.2f}s")
+        return response
+        
+    except Exception as e:
+        error_msg = escape_error_message(e)
+        logger.error(f"Error in RAG pipeline: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"RAG pipeline failed: {error_msg}")
+
+@router.get("/routines/{routine_id}", response_model=RAGPipelineResponse)
+async def get_routine(routine_id: str):
+    """
+    Get a stored workout routine by ID.
+    
+    Args:
+        routine_id: The UUID of the stored routine
+        
+    Returns:
+        Complete routine data
+    """
+    try:
+        stored_routine = await get_workout_routine(routine_id)
+        
+        if not stored_routine:
+            raise HTTPException(status_code=404, detail="Routine not found")
+        
+        # Convert stored routine to response format
+        routine_data = stored_routine['routine_data']['routine']
+        
+        # Convert exercises to response format
+        exercises = []
+        for exercise in routine_data['exercises']:
+            exercises.append(ExerciseInRoutine(**exercise))
+        
+        # Create metadata
+        metadata = RoutineMetadata(**routine_data['metadata'])
+        
+        # Create routine response
+        routine_response = RoutineResponse(
+            exercises=exercises,
+            metadata=metadata
+        )
+        
+        # Create final response
+        response = RAGPipelineResponse(
+            success=True,
+            routine_id=routine_id,
+            routine=routine_response,
+            user_requirements=stored_routine['user_requirements'],
+            target_duration=stored_routine['target_duration'],
+            intensity_level=stored_routine['intensity_level'],
+            created_at=str(stored_routine['created_at']),
+            processing_time=0.0  # Not available for stored routines
+        )
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = escape_error_message(e)
+        logger.error(f"Error retrieving routine {routine_id}: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve routine: {error_msg}")
 
 @router.get("/job-status/{job_id}")
 async def job_status(job_id: str = Path(..., description="Job ID to check status for")):

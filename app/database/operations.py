@@ -9,6 +9,7 @@ import uuid
 from typing import Dict, List, Optional
 import asyncpg
 from dotenv import load_dotenv
+import json
 
 # Load environment variables
 load_dotenv()
@@ -80,6 +81,37 @@ async def init_database():
             ON exercises(normalized_url, carousel_index, exercise_name)
         """)
         
+        # Create workout_routines table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS workout_routines (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_requirements TEXT NOT NULL,
+                target_duration INTEGER NOT NULL,
+                intensity_level VARCHAR(20) NOT NULL,
+                format VARCHAR(20) DEFAULT 'vertical',
+                routine_data JSONB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create indexes for workout_routines
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_workout_routines_intensity_level ON workout_routines(intensity_level)
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_workout_routines_created_at ON workout_routines(created_at)
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_workout_routines_user_requirements ON workout_routines USING gin(to_tsvector('english', user_requirements))
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_workout_routines_routine_data ON workout_routines USING gin(routine_data)
+        """)
+        
         logger.info("Database tables initialized")
 
 async def store_exercise(
@@ -131,6 +163,121 @@ async def store_exercise(
         
         logger.info(f"Stored exercise: {exercise_name} (ID: {exercise_id})")
         return exercise_id
+
+async def store_workout_routine(
+    user_requirements: str,
+    routine_json: Dict,
+    target_duration: Optional[int] = None,
+    intensity_level: str = "moderate"
+) -> str:
+    """
+    Store workout routine JSON in database.
+    
+    Args:
+        user_requirements: Original user prompt/requirements
+        routine_json: Complete routine JSON structure
+        target_duration: Target duration in seconds (optional)
+        intensity_level: Intensity level (low/moderate/high)
+        
+    Returns:
+        Routine ID (UUID)
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        routine_id = str(uuid.uuid4())
+        
+        # Calculate target duration if not provided
+        if target_duration is None:
+            exercises = routine_json.get('routine', {}).get('exercises', [])
+            # Estimate 2-3 minutes per exercise
+            target_duration = len(exercises) * 150  # 2.5 minutes per exercise
+        
+        await conn.execute("""
+            INSERT INTO workout_routines (
+                id, user_requirements, target_duration, intensity_level, routine_data
+            ) VALUES ($1, $2, $3, $4, $5)
+        """, routine_id, user_requirements, target_duration, intensity_level, json.dumps(routine_json))
+        
+        logger.info(f"Stored workout routine: {routine_id} with {len(routine_json.get('routine', {}).get('exercises', []))} exercises")
+        return routine_id
+
+async def get_workout_routine(routine_id: str) -> Optional[Dict]:
+    """
+    Get workout routine by ID.
+    
+    Args:
+        routine_id: Routine UUID
+        
+    Returns:
+        Routine data or None
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT * FROM workout_routines WHERE id = $1
+        """, routine_id)
+        
+        if row:
+            routine_data = dict(row)
+            # Parse the JSONB routine_data
+            routine_data['routine_data'] = json.loads(routine_data['routine_data'])
+            return routine_data
+        else:
+            return None
+
+async def get_recent_workout_routines(limit: int = 10) -> List[Dict]:
+    """
+    Get recent workout routines.
+    
+    Args:
+        limit: Maximum number of routines to return
+        
+    Returns:
+        List of recent routines
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT * FROM workout_routines 
+            ORDER BY created_at DESC 
+            LIMIT $1
+        """, limit)
+        
+        routines = []
+        for row in rows:
+            routine_data = dict(row)
+            # Parse the JSONB routine_data
+            routine_data['routine_data'] = json.loads(routine_data['routine_data'])
+            routines.append(routine_data)
+        
+        return routines
+
+async def delete_workout_routine(routine_id: str) -> bool:
+    """
+    Delete workout routine by ID.
+    
+    Args:
+        routine_id: Routine UUID
+        
+    Returns:
+        True if deleted, False if not found
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            DELETE FROM workout_routines WHERE id = $1
+        """, routine_id)
+        
+        if result == "DELETE 1":
+            logger.info(f"Deleted workout routine: {routine_id}")
+            return True
+        else:
+            logger.warning(f"Workout routine not found: {routine_id}")
+            return False
 
 async def check_existing_processing(normalized_url: str, carousel_index: int = 1, exercise_name: Optional[str] = None) -> Optional[Dict]:
     """
