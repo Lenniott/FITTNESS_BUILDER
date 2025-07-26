@@ -41,6 +41,13 @@ from app.api.compilation_endpoints import router as compilation_router
 class ProcessRequest(BaseModel):
     url: HttpUrl
     background: bool = False
+    
+    @field_validator('background', mode='before')
+    @classmethod
+    def convert_string_to_bool(cls, v):
+        if isinstance(v, str):
+            return v.lower() == 'true'
+        return v
 
 class ProcessResponse(BaseModel):
     success: bool
