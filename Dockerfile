@@ -13,12 +13,15 @@ RUN apt-get update && apt-get install -y \
 
 # Set work directory
 WORKDIR /app
-RUN python -c "import whisper; whisper.load_model('base')"
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download Whisper model to avoid runtime delays
+RUN python -c "import whisper; whisper.load_model('base')"
 
 # Copy application code
 COPY . .
