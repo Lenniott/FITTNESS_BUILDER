@@ -30,8 +30,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Serve static files from /app/storage at /storage
-app.mount("/storage", StaticFiles(directory="/app/storage"), name="storage")
+# Serve static files from storage directory
+import os
+storage_path = "/app/storage" if os.path.exists("/app/storage") else "./storage"
+app.mount("/storage", StaticFiles(directory=storage_path), name="storage")
 
 # Setup middleware
 setup_middleware(app)
