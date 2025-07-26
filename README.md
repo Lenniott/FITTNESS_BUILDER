@@ -504,3 +504,33 @@ curl -X POST http://localhost:8000/api/v1/exercises/semantic-search \
   -H "Content-Type: application/json" \
   -d '{"query": "I need a beginner workout for my back"}'
 ```
+
+## 🌐 UI API Base URL Configuration (LAN, Tailscale, or Public)
+
+Your UI should NOT hardcode the API base URL. Instead, use an environment variable or config file so you can easily switch between:
+- Local LAN (e.g., http://192.168.0.47:8000)
+- Tailscale (e.g., http://100.x.x.x:8000)
+- Public IP or domain
+
+**Example (React):**
+```js
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+fetch(`${API_BASE_URL}/api/v1/exercises`)
+```
+
+**Example (.env):**
+```
+REACT_APP_API_BASE_URL=http://100.x.x.x:8000
+```
+
+**Result:**
+- UI works locally, remotely (Tailscale), or publicly by changing one variable
+- Video clips and all API endpoints will work as long as the API is reachable
+
+## 📂 Static File Serving
+
+The API now serves all video clips and files from `/app/storage` at the `/storage` URL path. For example:
+```
+http://<API_HOST>:8000/storage/clips/filename.mp4
+```
+No changes are needed to Docker volumes or the UI code. Just ensure the UI uses the correct API base URL.

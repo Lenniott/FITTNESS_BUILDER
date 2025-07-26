@@ -11,6 +11,7 @@ from pydantic import BaseModel, HttpUrl
 from typing import List, Optional
 import uvicorn
 from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,6 +29,9 @@ app = FastAPI(
     description="AI-powered video processing and exercise clip extraction with workout compilation",
     version="1.0.0"
 )
+
+# Serve static files from /app/storage at /storage
+app.mount("/storage", StaticFiles(directory="/app/storage"), name="storage")
 
 # Setup middleware
 setup_middleware(app)
