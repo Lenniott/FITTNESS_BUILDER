@@ -5,12 +5,30 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Instagram Carousel Processing**: Fixed carousel processing to handle all items regardless of URL format
+  - Fixed issue where base Instagram URLs (without img_index) only processed first carousel item
+  - Updated processor to use actual carousel index (i+1) for each file instead of URL-derived index
+  - Now processes all carousel items whether URL contains img_index parameter or not
+  - Maintains proper carousel_index tracking in database for each individual carousel item
+
+### Added
+- **Comprehensive API Contract Documentation**: Complete API documentation for UI integration
+  - Added detailed API contract documentation to README.md
+  - Documented all CRUD operations for routines, exercises, and URL processing
+  - Included clear data structure explanations for Exercise and Routine entities
+  - Added complete request/response examples for all endpoints
+  - Documented the three-component nature of exercises (clip file, PostgreSQL row, Qdrant vector)
+  - Provided curl examples for all major operations
+  - Organized endpoints by functionality (Routine Management, URL Processing, Exercise Management, Utilities)
+  - Added health checks, statistics, and cleanup operation documentation
+  - Included supported URL formats and processing pipeline explanation
+
+### Fixed
 - **Gemini Model Compatibility**: Updated Gemini model names from deprecated `gemini-pro` to current `gemini-2.5-flash`
   - Fixed `app/core/exercise_story_generator.py` to use `gemini-2.5-flash` model
   - Fixed `app/core/exercise_selector.py` to use `gemini-2.5-flash` model
   - Added error handling and fallback responses for API failures
   - Resolved 404 model not found errors in RAG demo
-  - Demo now successfully generates exercise stories and retrieves similar exercises from vector database
 
 - **Exercise Diversity Enhancement**: Improved vector search to provide more diverse exercise recommendations
   - Added `search_diverse_exercises()` function with intelligent deduplication
@@ -19,6 +37,48 @@ All notable changes to this project will be documented in this file.
   - Increased initial candidate pool from 20 to 40 with lower score threshold (0.3)
   - Limited similar exercise types to maximum 2 per story for better variety
   - Results now show diverse movement patterns instead of clustered similar exercises
+
+- **Database Enrichment Fix**: Resolved UUID comparison issue in vector search enrichment
+  - Fixed `enrich_vector_results_with_database_data()` function to properly match database records
+  - Converted UUID objects to strings for lookup dictionary to resolve type mismatch
+  - Now correctly returns URLs, database IDs, and complete exercise data from PostgreSQL
+  - All enriched results now include full structured data (benefits, fitness level, intensity, etc.)
+
+### Added
+- **Routine Selection Pipeline**: New intelligent exercise selection function for complete RAG workflow
+  - Added `select_routine_from_stories_and_results()` to `app/core/exercise_selector.py`
+  - Takes original prompt, exercise stories, and enriched exercise results as input
+  - Uses second LLM to intelligently select and order exercises for optimal routine
+  - Returns ordered array of database IDs for routine compilation
+  - Includes comprehensive validation and fallback mechanisms
+  - Creates well-rounded routines with logical progression (warm-up → strength → cool-down)
+  - Considers fitness level, intensity, variety, and user requirements
+  - Test script `test_routine_selection.py` demonstrates complete pipeline functionality
+
+- **Final JSON Structure Creation**: Complete UI-ready JSON structure with database operations metadata
+  - Added `create_final_routine_json()` to `app/core/exercise_selector.py`
+  - Creates comprehensive JSON with all required UI fields (exercise_name, how_to, benefits, etc.)
+  - Includes database operation metadata (database_ids, qdrant_ids, video_paths)
+  - Provides complete information for UI display and database/vector operations
+  - Supports exercise ordering and routine metadata
+
+- **Database Storage Functions**: Complete PostgreSQL storage for workout routines
+  - Added `store_workout_routine()` to `app/database/operations.py`
+  - Stores complete routine JSON in `workout_routines` table
+  - Includes user requirements, target duration, intensity level, and routine data
+  - Added `get_workout_routine()` for retrieving stored routines
+  - Added `get_recent_workout_routines()` for listing recent routines
+  - Added `delete_workout_routine()` for routine deletion
+  - Complete pipeline test demonstrates end-to-end functionality from user prompt to stored routine
+
+### Removed
+- **Duplicate Endpoint Cleanup**: Removed old routine endpoints to avoid conflicts
+  - Removed `app/api/routine_endpoints.py` (old routine endpoints)
+  - Removed `app/core/routine_compiler.py` (old routine compiler)
+  - Removed `app/database/routine_operations.py` (old routine operations)
+  - Removed related test files for old routine system
+  - Kept new RAG pipeline endpoints in `app/api/endpoints.py`
+  - Consolidated all routine functionality into single, clean API structure
 
 ### Added
 - **Phase 1: Database & Core Structure Implementation**

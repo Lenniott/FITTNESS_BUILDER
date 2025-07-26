@@ -386,33 +386,19 @@ async def enrich_vector_results_with_database_data(vector_results: List[Dict]) -
         # Get database connection
         pool = await get_database_connection()
         
-        # Extract exercise names and video paths from vector results for matching
-        exercise_matches = []
-        for result in vector_results:
-            metadata = result['metadata']
-            exercise_name = metadata.get('exercise_name', '')
-            video_path = metadata.get('video_path', '')
-            if exercise_name and video_path:
-                exercise_matches.append((exercise_name, video_path))
+        # Extract qdrant_ids from vector results
+        qdrant_ids = [result['metadata'].get('qdrant_id') for result in vector_results if result['metadata'].get('qdrant_id')]
         
-        logger.info(f"Found {len(exercise_matches)} exercises to match from vector results")
+        logger.info(f"Found {len(qdrant_ids)} qdrant_ids in vector results: {qdrant_ids[:3]}...")
         
-        if not exercise_matches:
-            logger.warning("No exercise names found in vector results")
+        if not qdrant_ids:
+            logger.warning("No qdrant_ids found in vector results")
             return vector_results
         
-        # Query database for complete exercise data using exercise_name and video_path
+        # Query database for complete exercise data using qdrant_id
         async with pool.acquire() as conn:
-            # Build query with multiple OR conditions for exercise_name and video_path matches
-            conditions = []
-            params = []
-            param_count = 1
-            
-            for exercise_name, video_path in exercise_matches:
-                conditions.append(f"(exercise_name = ${param_count} AND video_path = ${param_count + 1})")
-                params.extend([exercise_name, video_path])
-                param_count += 2
-            
+            # Use parameterized query to avoid SQL injection
+            placeholders = ','.join([f'${i+1}' for i in range(len(qdrant_ids))])
             query = f"""
                 SELECT 
                     id,
@@ -432,28 +418,25 @@ async def enrich_vector_results_with_database_data(vector_results: List[Dict]) -
                     qdrant_id,
                     created_at
                 FROM exercises 
-                WHERE {' OR '.join(conditions)}
+                WHERE qdrant_id = ANY($1)
             """
             
-            rows = await conn.fetch(query, *params)
+            logger.info(f"Executing query with qdrant_ids: {qdrant_ids[:3]}...")
+            rows = await conn.fetch(query, qdrant_ids)
             logger.info(f"Found {len(rows)} matching database records")
             
-            # Create lookup dictionary using exercise_name + video_path as key
-            db_data_lookup = {}
-            for row in rows:
-                key = f"{row['exercise_name']}|{row['video_path']}"
-                db_data_lookup[key] = dict(row)
+            if rows:
+                logger.info(f"Sample row: {dict(rows[0])}")
+            
+            # Create lookup dictionary using qdrant_id as key
+            db_data_lookup = {str(row['qdrant_id']): dict(row) for row in rows}
+            logger.info(f"Lookup keys: {list(db_data_lookup.keys())[:3]}...")
         
         # Enrich vector results with database data
         enriched_results = []
         for vector_result in vector_results:
-            metadata = vector_result['metadata']
-            exercise_name = metadata.get('exercise_name', '')
-            video_path = metadata.get('video_path', '')
-            
-            # Create lookup key
-            lookup_key = f"{exercise_name}|{video_path}"
-            db_data = db_data_lookup.get(lookup_key, {})
+            qdrant_id = vector_result['metadata'].get('qdrant_id')
+            db_data = db_data_lookup.get(qdrant_id, {})
             
             # Merge vector metadata with database data
             enriched_metadata = {
@@ -469,18 +452,18 @@ async def enrich_vector_results_with_database_data(vector_results: List[Dict]) -
                 'url': db_data.get('url'),
                 'normalized_url': db_data.get('normalized_url'),
                 'carousel_index': db_data.get('carousel_index'),
-                'exercise_name': db_data.get('exercise_name') or metadata.get('exercise_name'),
-                'video_path': db_data.get('video_path') or metadata.get('video_path'),
-                'start_time': db_data.get('start_time') or metadata.get('start_time'),
-                'end_time': db_data.get('end_time') or metadata.get('end_time'),
-                'how_to': db_data.get('how_to') or metadata.get('how_to'),
-                'benefits': db_data.get('benefits') or metadata.get('benefits'),
-                'counteracts': db_data.get('counteracts') or metadata.get('counteracts'),
-                'fitness_level': db_data.get('fitness_level') or metadata.get('fitness_level'),
-                'rounds_reps': db_data.get('rounds_reps') or metadata.get('rounds_reps'),
-                'intensity': db_data.get('intensity') or metadata.get('intensity'),
+                'exercise_name': db_data.get('exercise_name') or vector_result['metadata'].get('exercise_name'),
+                'video_path': db_data.get('video_path') or vector_result['metadata'].get('video_path'),
+                'start_time': db_data.get('start_time') or vector_result['metadata'].get('start_time'),
+                'end_time': db_data.get('end_time') or vector_result['metadata'].get('end_time'),
+                'how_to': db_data.get('how_to') or vector_result['metadata'].get('how_to'),
+                'benefits': db_data.get('benefits') or vector_result['metadata'].get('benefits'),
+                'counteracts': db_data.get('counteracts') or vector_result['metadata'].get('counteracts'),
+                'fitness_level': db_data.get('fitness_level') or vector_result['metadata'].get('fitness_level'),
+                'rounds_reps': db_data.get('rounds_reps') or vector_result['metadata'].get('rounds_reps'),
+                'intensity': db_data.get('intensity') or vector_result['metadata'].get('intensity'),
                 'created_at': db_data.get('created_at'),
-                'qdrant_id': metadata.get('qdrant_id')
+                'qdrant_id': qdrant_id
             }
             
             enriched_results.append(enriched_result)

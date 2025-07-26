@@ -39,10 +39,6 @@ app.include_router(router, prefix="/api/v1")
 from app.api.compilation_endpoints import router as compilation_router
 app.include_router(compilation_router, prefix="/api/v1")
 
-# Include routine endpoints
-from app.api.routine_endpoints import router as routine_router
-app.include_router(routine_router, prefix="/api/v1")
-
 @app.get("/")
 async def root():
     """Health check endpoint."""

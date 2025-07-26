@@ -33,28 +33,414 @@ docker-compose up -d --build
 
 **Note**: The container expects video clips to be stored in `/app/storage/clips/` inside the container, which maps to your host volume `fitness_storage`.
 
-## 📊 API Endpoints
+## 📊 API Contract Documentation
 
-### Core Processing
-- `POST /api/v1/process` - Process fitness video from URL
-- `GET /api/v1/exercises` - List all exercises
-- `GET /api/v1/exercises/{id}` - Get specific exercise
+### 🔗 Base URL
+```
+http://localhost:8000/api/v1
+```
 
-### Search & Discovery
-- `POST /api/v1/exercises/search` - Search exercises with filters
-- `POST /api/v1/exercises/semantic-search` - Semantic search
-- `GET /api/v1/exercises/similar/{id}` - Find similar exercises
+### 📋 Data Structure Concepts
 
-### Data Management
-- `DELETE /api/v1/exercises/{id}` - Delete specific exercise
-- `DELETE /api/v1/exercises/url/{url}` - Delete exercises for specific URL
-- `DELETE /api/v1/exercises/all` - Delete all exercises and clips
+#### Exercise Entity
+An **exercise** in this system consists of three interconnected components:
+1. **Stored Clip File** - Video file in `storage/clips/` directory
+2. **PostgreSQL Row** - Metadata stored in `exercises` table
+3. **Qdrant Vector** - AI embedding for semantic search
 
-### Health & Monitoring
-- `GET /health` - Health check
-- `GET /api/v1/health/database` - Database health check
-- `GET /api/v1/health/vector` - Vector database health check
-- `GET /api/v1/stats` - Processing statistics
+All three components are linked via `qdrant_id` and `database_id` fields.
+
+#### Routine Entity
+A **routine** is a complete workout structure containing:
+- **Exercises Array** - Ordered list of exercises with UI-ready data
+- **Metadata** - Database operations info (database_ids, qdrant_ids, video_paths)
+- **User Requirements** - Original prompt and parameters
+- **Processing Info** - Creation time, processing duration
+
+---
+
+## 🏋️ ROUTINE MANAGEMENT (CRUD)
+
+### Create Routine
+**Generate intelligent workout routine from user prompt**
+
+```http
+POST /api/v1/generate-routine
+```
+
+**Request Body:**
+```json
+{
+  "user_prompt": "I want to get good at pull ups but i can only do 1 at the moment",
+  "target_duration": 900,
+  "intensity_level": "moderate",
+  "exercises_per_story": 3,
+  "initial_limit": 40,
+  "score_threshold": 0.3
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "routine_id": "359072d3-b5f8-40e9-a79a-81283533c3d6",
+  "routine": {
+    "exercises": [
+      {
+        "order": 1,
+        "exercise_name": "Proper Pull-up Technique",
+        "how_to": "Start from a dead hang with shoulders externally rotated...",
+        "benefits": "Increases pull-up strength and protects shoulder joints...",
+        "counteracts": "Beneficial for individuals with sedentary lifestyles...",
+        "fitness_level": 2,
+        "rounds_reps": "Perform 3 sets of 8-12 repetitions...",
+        "intensity": 3
+      }
+    ],
+    "metadata": {
+      "total_exercises": 5,
+      "database_operations": {
+        "database_ids": ["c8c8d8dd-4223-44e9-88c7-f20695bc1e35"],
+        "qdrant_ids": ["a2de96ab-3d00-4d6f-9da5-0566a5b47002"],
+        "video_paths": ["storage/clips/proper_pull-up_technique_4d046a12.mp4"]
+      }
+    }
+  },
+  "user_requirements": "I want to get good at pull ups but i can only do 1 at the moment",
+  "target_duration": 900,
+  "intensity_level": "moderate",
+  "created_at": "2025-07-26 06:08:17.423912",
+  "processing_time": 34.79
+}
+```
+
+### Read Routine
+**Retrieve stored routine by ID**
+
+```http
+GET /api/v1/routines/{routine_id}
+```
+
+**Response:** Same structure as Create Routine response
+
+---
+
+## 🎥 URL PROCESSING
+
+### Process Video from URL
+**Extract exercises from fitness video**
+
+```http
+POST /api/v1/process
+```
+
+**Request Body:**
+```json
+{
+  "url": "https://www.instagram.com/p/CxYz123ABC/",
+  "background": false
+}
+```
+
+**Supported Platforms:**
+- YouTube: `https://www.youtube.com/watch?v=VIDEO_ID`
+- Instagram: `https://www.instagram.com/p/POST_ID/`
+- TikTok: `https://www.tiktok.com/@user/video/VIDEO_ID`
+
+**Synchronous Response:**
+```json
+{
+  "success": true,
+  "processed_clips": [
+    {
+      "exercise_name": "Push-up",
+      "video_path": "storage/clips/push-up_abc123.mp4",
+      "start_time": 10.5,
+      "end_time": 25.3
+    }
+  ],
+  "total_clips": 1,
+  "processing_time": 45.2,
+  "temp_dir": "storage/temp/gilgamesh_download_abc123"
+}
+```
+
+**Asynchronous Response:**
+```json
+{
+  "success": true,
+  "processed_clips": [],
+  "total_clips": 0,
+  "processing_time": 0.0,
+  "temp_dir": null,
+  "job_id": "e513927a-2f60-4ead-b3e6-fa9597f50066"
+}
+```
+
+### Check Job Status
+**Poll for background processing status**
+
+```http
+GET /api/v1/job-status/{job_id}
+```
+
+**Response States:**
+```json
+// In Progress
+{
+  "status": "in_progress",
+  "result": null
+}
+
+// Completed
+{
+  "status": "done",
+  "result": {
+    "success": true,
+    "processed_clips": [...],
+    "total_clips": 1,
+    "processing_time": 45.2,
+    "temp_dir": "storage/temp/gilgamesh_download_abc123"
+  }
+}
+
+// Failed
+{
+  "status": "failed",
+  "result": {
+    "error": "Some error message"
+  }
+}
+```
+
+---
+
+## 💪 EXERCISE MANAGEMENT (CRUD)
+
+### Create Exercise
+**Exercises are created automatically during video processing**
+
+### Read Exercises
+
+#### List All Exercises
+```http
+GET /api/v1/exercises
+```
+
+**Query Parameters:**
+- `url` (optional): Filter by source URL
+- `limit` (optional): Number of results (default: 50)
+- `offset` (optional): Pagination offset (default: 0)
+
+**Response:**
+```json
+[
+  {
+    "id": "c8c8d8dd-4223-44e9-88c7-f20695bc1e35",
+    "exercise_name": "Push-up",
+    "video_path": "storage/clips/push-up_abc123.mp4",
+    "start_time": 10.5,
+    "end_time": 25.3,
+    "how_to": "Start in plank position...",
+    "benefits": "Strengthens chest, shoulders, and triceps",
+    "counteracts": "Improves upper body pushing strength",
+    "fitness_level": 3,
+    "rounds_reps": "3 sets of 10-15 reps",
+    "intensity": 5,
+    "qdrant_id": "77c6856e-e4a2-42a7-b361-bc73808ac812",
+    "created_at": "2025-07-26T06:08:17.423912"
+  }
+]
+```
+
+> **Note:** The `qdrant_id` field is always returned as a string (UUID format) in API responses, even if stored as a UUID in the database.
+
+#### Get Specific Exercise
+```http
+GET /api/v1/exercises/{exercise_id}
+```
+
+**Response:** Single exercise object (same structure as above)
+
+#### Search Exercises
+```http
+POST /api/v1/exercises/search
+```
+
+**Request Body:**
+```json
+{
+  "query": "push",
+  "fitness_level_min": 3,
+  "fitness_level_max": 7,
+  "intensity_min": 5,
+  "intensity_max": 10,
+  "limit": 20
+}
+```
+
+#### Semantic Search
+```http
+POST /api/v1/exercises/semantic-search
+```
+
+**Request Body:**
+```json
+{
+  "query": "I need a beginner workout for my back that helps with posture",
+  "limit": 10,
+  "score_threshold": 0.7
+}
+```
+
+#### Find Similar Exercises
+```http
+GET /api/v1/exercises/similar/{exercise_id}
+```
+
+**Query Parameters:**
+- `limit` (optional): Number of similar exercises (default: 10, max: 50)
+
+### Update Exercise
+**Exercises are immutable - updates require reprocessing the video**
+
+### Delete Exercises
+
+#### Delete by ID
+```http
+DELETE /api/v1/exercises/{exercise_id}
+```
+
+> **Cascade Cleanup:**
+> - This endpoint will remove the exercise from PostgreSQL, delete the associated video file from storage, and remove the vector from Qdrant. All three storage layers are cleaned up automatically.
+
+#### Delete by URL
+```http
+DELETE /api/v1/exercises/url/{url}
+```
+
+#### Delete All Exercises
+```http
+DELETE /api/v1/exercises/all
+```
+
+#### Batch Delete by Criteria
+```http
+DELETE /api/v1/exercises/batch
+```
+
+**Query Parameters:**
+- `fitness_level_min` (optional): Minimum fitness level (0-10)
+- `fitness_level_max` (optional): Maximum fitness level (0-10)
+- `intensity_min` (optional): Minimum intensity (0-10)
+- `intensity_max` (optional): Maximum intensity (0-10)
+- `exercise_name_pattern` (optional): Pattern to match exercise names
+- `created_before` (optional): Delete exercises created before this date (ISO format)
+- `created_after` (optional): Delete exercises created after this date (ISO format)
+
+#### Purge Low Quality Exercises
+```http
+DELETE /api/v1/exercises/purge-low-quality
+```
+
+**Query Parameters:**
+- `fitness_level_threshold` (optional): Delete exercises below this fitness level (default: 3)
+- `intensity_threshold` (optional): Delete exercises below this intensity level (default: 3)
+- `name_patterns` (optional): Comma-separated patterns to match for deletion
+
+#### Preview Deletion
+```http
+GET /api/v1/exercises/deletion-preview
+```
+
+**Query Parameters:** Same as batch delete, but only shows what would be deleted
+
+---
+
+## 🗑️ Verified Delete Workflow
+
+When you delete an exercise using `DELETE /api/v1/exercises/{exercise_id}`:
+- The exercise row is removed from PostgreSQL
+- The associated video file is deleted from `storage/clips/`
+- The vector is removed from Qdrant
+- The API will return `{"detail": "Exercise not found"}` if you try to fetch a deleted exercise
+- The file will not be present in the file system
+- The vector will not be returned in semantic search results
+
+This ensures **full cleanup** of all exercise data across the system.
+
+---
+
+## 🔧 UTILITY ENDPOINTS
+
+### Health Checks
+```http
+GET /health
+GET /api/v1/health/database
+GET /api/v1/health/vector
+```
+
+### Statistics
+```http
+GET /api/v1/stats
+```
+
+### Cleanup Operations
+```http
+GET /api/v1/cleanup/analysis
+GET /api/v1/cleanup/orphaned-files
+DELETE /api/v1/cleanup/orphaned-files?confirm=true
+DELETE /api/v1/cleanup/temp-files?days_old=7&confirm=true
+GET /api/v1/cleanup/preview
+```
+
+### Generate Clip from Exercise
+```http
+POST /api/v1/exercises/{exercise_id}/generate-clip
+```
+
+---
+
+## 📡 API Usage Examples
+
+### Generate a Pull-up Progression Routine
+```bash
+curl -X POST http://localhost:8000/api/v1/generate-routine \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_prompt": "I want to get good at pull ups but i can only do 1 at the moment",
+    "target_duration": 900,
+    "intensity_level": "moderate"
+  }'
+```
+
+### Process Instagram Fitness Video
+```bash
+curl -X POST http://localhost:8000/api/v1/process \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.instagram.com/p/CxYz123ABC/",
+    "background": true
+  }'
+```
+
+### Search for Back Exercises
+```bash
+curl -X POST http://localhost:8000/api/v1/exercises/semantic-search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "I need a beginner workout for my back that helps with posture",
+    "limit": 10
+  }'
+```
+
+### Get Stored Routine
+```bash
+curl -X GET http://localhost:8000/api/v1/routines/359072d3-b5f8-40e9-a79a-81283533c3d6
+```
+
+---
 
 ## 🔧 Configuration
 
@@ -88,191 +474,6 @@ app/
 ├── services/     # External services (AI, storage)
 └── utils/        # Utility functions
 ```
-
-## 📡 API Usage Guide
-
-### Process Video from URL
-
-**Endpoint**: `POST /api/v1/process`
-
-**Supported Platforms**:
-- YouTube: `https://www.youtube.com/watch?v=VIDEO_ID`
-- Instagram: `https://www.instagram.com/p/POST_ID/`
-- TikTok: `https://www.tiktok.com/@user/video/VIDEO_ID`
-
-**Request (Synchronous):**
-```bash
-curl -X POST http://localhost:8000/api/v1/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://www.instagram.com/p/CxYz123ABC/",
-    "background": false
-  }'
-```
-
-**Request (Background/Asynchronous):**
-```bash
-curl -X POST http://localhost:8000/api/v1/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://www.instagram.com/p/CxYz123ABC/",
-    "background": true
-  }'
-```
-
-**Response (Background):**
-```json
-{
-  "success": true,
-  "processed_clips": [],
-  "total_clips": 0,
-  "processing_time": 0.0,
-  "temp_dir": null,
-  "job_id": "e513927a-2f60-4ead-b3e6-fa9597f50066"
-}
-```
-
-### Poll for Job Status
-
-**Endpoint**: `GET /api/v1/job-status/{job_id}`
-
-**Request:**
-```bash
-curl http://localhost:8000/api/v1/job-status/e513927a-2f60-4ead-b3e6-fa9597f50066
-```
-
-**Possible Responses:**
-- **In Progress:**
-  ```json
-  {
-    "status": "in_progress",
-    "result": null
-  }
-  ```
-- **Done:**
-  ```json
-  {
-    "status": "done",
-    "result": {
-      "success": true,
-      "processed_clips": [...],
-      "total_clips": 1,
-      "processing_time": 45.2,
-      "temp_dir": "storage/temp/gilgamesh_download_abc123"
-    }
-  }
-  ```
-- **Failed:**
-  ```json
-  {
-    "status": "failed",
-    "result": {
-      "error": "Some error message"
-    }
-  }
-  ```
-
----
-
-### List All Exercises
-
-**Endpoint**: `GET /api/v1/exercises`
-
-**Query Parameters**:
-- `url` (optional): Filter by source URL
-- `limit` (optional): Number of results (default: 50)
-- `offset` (optional): Pagination offset (default: 0)
-
-**Request**:
-```bash
-curl "http://localhost:8000/api/v1/exercises?url=https://www.instagram.com/p/CxYz123ABC/&limit=10"
-```
-
-### Search Exercises
-
-**Endpoint**: `POST /api/v1/exercises/search`
-
-**Request**:
-```bash
-curl -X POST http://localhost:8000/api/v1/exercises/search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "fitness_level": [3, 7],
-    "intensity": [5, 10],
-    "exercise_name": "push",
-    "limit": 20
-  }'
-```
-
-### Semantic Search
-
-**Endpoint**: `POST /api/v1/exercises/semantic-search`
-
-**Request**:
-```bash
-curl -X POST http://localhost:8000/api/v1/exercises/semantic-search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "I need a beginner workout for my back that helps with posture",
-    "limit": 10,
-    "score_threshold": 0.7
-  }'
-```
-
-### Delete Exercises
-
-**Delete by ID**:
-```bash
-curl -X DELETE http://localhost:8000/api/v1/exercises/123e4567-e89b-12d3-a456-426614174000
-```
-
-**Delete by URL**:
-```bash
-curl -X DELETE "http://localhost:8000/api/v1/exercises/url/https%3A//www.instagram.com/p/CxYz123ABC/"
-```
-
-**Delete All**:
-```bash
-curl -X DELETE http://localhost:8000/api/v1/exercises/all
-```
-
-### Health Checks
-
-**API Health**:
-```bash
-curl http://localhost:8000/health
-```
-
-**Database Health**:
-```bash
-curl http://localhost:8000/api/v1/health/database
-```
-
-**Vector Store Health**:
-```bash
-curl http://localhost:8000/api/v1/health/vector
-```
-
-**Processing Statistics**:
-```bash
-curl http://localhost:8000/api/v1/stats
-```
-
-## 🔍 Supported URL Formats
-
-### YouTube
-- `https://www.youtube.com/watch?v=VIDEO_ID`
-- `https://youtu.be/VIDEO_ID`
-- `https://www.youtube.com/shorts/VIDEO_ID`
-
-### Instagram
-- `https://www.instagram.com/p/POST_ID/`
-- `https://www.instagram.com/reel/POST_ID/`
-- Carousel posts are automatically detected and all items processed
-
-### TikTok
-- `https://www.tiktok.com/@username/video/VIDEO_ID`
-- `https://vm.tiktok.com/CODE/`
 
 ## ⚡ Processing Pipeline
 
