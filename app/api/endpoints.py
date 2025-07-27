@@ -49,6 +49,16 @@ class ProcessRequest(BaseModel):
             return v.lower() == 'true'
         return v
 
+class BulkExerciseRequest(BaseModel):
+    exercise_ids: List[str]
+
+class StoryGenerationRequest(BaseModel):
+    user_prompt: str
+    story_count: int = 5
+
+class StoryGenerationResponse(BaseModel):
+    stories: List[str]
+
 class ProcessResponse(BaseModel):
     success: bool
     processed_clips: List[Dict]
@@ -99,20 +109,16 @@ class RAGPipelineRequest(BaseModel):
 
 class ExerciseInRoutine(BaseModel):
     order: int
-    exercise_name: str
-    how_to: str
-    benefits: str
-    counteracts: str
-    fitness_level: int
-    rounds_reps: str
-    intensity: int
+    database_id: str
 
 class RoutineMetadata(BaseModel):
     total_exercises: int
-    database_operations: Dict[str, List[str]]
+    user_requirements: str
+    target_duration: Optional[int] = None
+    intensity_level: str
 
 class RoutineResponse(BaseModel):
-    exercises: List[ExerciseInRoutine]
+    exercise_ids: List[str]
     metadata: RoutineMetadata
 
 class RAGPipelineResponse(BaseModel):
@@ -243,17 +249,29 @@ async def generate_workout_routine(request: RAGPipelineRequest):
         # Convert stored routine to response format
         routine_data = stored_routine['routine_data']['routine']
         
-        # Convert exercises to response format
-        exercises = []
+        # Extract exercise IDs from the stored routine
+        exercise_ids = []
         for exercise in routine_data['exercises']:
-            exercises.append(ExerciseInRoutine(**exercise))
+            # Handle both old and new formats
+            if 'database_id' in exercise:
+                exercise_ids.append(exercise['database_id'])
+            elif 'id' in exercise:
+                exercise_ids.append(exercise['id'])
+            else:
+                logger.warning(f"Exercise missing database_id: {exercise}")
+                continue
         
         # Create metadata
-        metadata = RoutineMetadata(**routine_data['metadata'])
+        metadata = RoutineMetadata(
+            total_exercises=len(exercise_ids),
+            user_requirements=stored_routine['user_requirements'],
+            target_duration=stored_routine['target_duration'],
+            intensity_level=stored_routine['intensity_level']
+        )
         
         # Create routine response
         routine_response = RoutineResponse(
-            exercises=exercises,
+            exercise_ids=exercise_ids,
             metadata=metadata
         )
         
@@ -297,17 +315,29 @@ async def get_routine(routine_id: str):
         # Convert stored routine to response format
         routine_data = stored_routine['routine_data']['routine']
         
-        # Convert exercises to response format
-        exercises = []
+        # Extract exercise IDs from the stored routine
+        exercise_ids = []
         for exercise in routine_data['exercises']:
-            exercises.append(ExerciseInRoutine(**exercise))
+            # Handle both old and new formats
+            if 'database_id' in exercise:
+                exercise_ids.append(exercise['database_id'])
+            elif 'id' in exercise:
+                exercise_ids.append(exercise['id'])
+            else:
+                logger.warning(f"Exercise missing database_id: {exercise}")
+                continue
         
         # Create metadata
-        metadata = RoutineMetadata(**routine_data['metadata'])
+        metadata = RoutineMetadata(
+            total_exercises=len(exercise_ids),
+            user_requirements=stored_routine['user_requirements'],
+            target_duration=stored_routine['target_duration'],
+            intensity_level=stored_routine['intensity_level']
+        )
         
         # Create routine response
         routine_response = RoutineResponse(
-            exercises=exercises,
+            exercise_ids=exercise_ids,
             metadata=metadata
         )
         
@@ -385,6 +415,48 @@ async def get_exercise(exercise_id: str):
         error_msg = escape_error_message(e)
         logger.error(f"Error getting exercise {exercise_id}: {error_msg}")
         raise HTTPException(status_code=500, detail=f"Failed to get exercise: {error_msg}")
+
+@router.post("/exercises/bulk", response_model=List[ExerciseResponse])
+async def get_exercises_bulk(request: BulkExerciseRequest):
+    """Get multiple exercises by their IDs."""
+    try:
+        exercises = []
+        for exercise_id in request.exercise_ids:
+            exercise = await get_exercise_by_id(exercise_id)
+            if exercise:
+                # Convert UUID and datetime to strings for Pydantic
+                exercise_dict = dict(exercise)
+                if 'id' in exercise_dict and exercise_dict['id'] is not None:
+                    exercise_dict['id'] = str(exercise_dict['id'])
+                if 'created_at' in exercise_dict and exercise_dict['created_at'] is not None:
+                    exercise_dict['created_at'] = str(exercise_dict['created_at'])
+                exercises.append(ExerciseResponse(**exercise_dict))
+            else:
+                logger.warning(f"Exercise {exercise_id} not found")
+        
+        return exercises
+    except Exception as e:
+        error_msg = escape_error_message(e)
+        logger.error(f"Error getting exercises bulk: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to get exercises: {error_msg}")
+
+@router.post("/stories/generate", response_model=StoryGenerationResponse)
+async def generate_exercise_stories(request: StoryGenerationRequest):
+    """Generate exercise requirement stories from user prompt."""
+    try:
+        from app.core.exercise_story_generator import generate_exercise_stories
+        
+        logger.info(f"Generating {request.story_count} exercise stories for prompt: {request.user_prompt}")
+        
+        stories = generate_exercise_stories(request.user_prompt, request.story_count)
+        
+        logger.info(f"Generated {len(stories)} exercise stories")
+        return StoryGenerationResponse(stories=stories)
+        
+    except Exception as e:
+        error_msg = escape_error_message(e)
+        logger.error(f"Error generating exercise stories: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate exercise stories: {error_msg}")
 
 @router.post("/exercises/search", response_model=List[ExerciseResponse])
 async def search_exercises_endpoint(request: SearchRequest):
@@ -796,6 +868,22 @@ class SemanticSearchRequest(BaseModel):
     query: str
     limit: int = 10
 
+class SemanticSearchResponse(BaseModel):
+    exercise_ids: List[str]
+    total_found: int
+
+class CreateRoutineRequest(BaseModel):
+    exercise_ids: List[str]
+    name: str
+    description: Optional[str] = None
+
+class CreateRoutineResponse(BaseModel):
+    routine_id: str
+    name: str
+    exercise_ids: List[str]
+    description: Optional[str] = None
+    created_at: str
+
 @router.post("/exercises/semantic-search")
 async def semantic_search_exercises(request: SemanticSearchRequest):
     """
@@ -836,6 +924,76 @@ async def semantic_search_exercises(request: SemanticSearchRequest):
     except Exception as e:
         logger.error(f"Error in semantic search: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Semantic search failed: {str(e)}")
+
+@router.post("/exercises/semantic-search-ids", response_model=SemanticSearchResponse)
+async def semantic_search_exercises_ids(request: SemanticSearchRequest):
+    """
+    Search exercises using natural language queries and return only exercise IDs.
+    
+    This endpoint is designed for the new routine architecture where the UI
+    will fetch full exercise details separately using the bulk endpoint.
+    """
+    try:
+        from app.database.vectorization import search_similar_exercises
+        
+        # Search for similar exercises using vector search
+        similar_exercises = await search_similar_exercises(request.query, limit=request.limit)
+        
+        if not similar_exercises:
+            return SemanticSearchResponse(exercise_ids=[], total_found=0)
+        
+        # Extract database IDs directly from vector results metadata
+        exercise_ids = []
+        for exercise in similar_exercises:
+            database_id = exercise['metadata'].get('database_id')
+            if database_id:
+                exercise_ids.append(database_id)
+        
+        return SemanticSearchResponse(
+            exercise_ids=exercise_ids,
+            total_found=len(exercise_ids)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in semantic search IDs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Semantic search failed: {str(e)}")
+
+@router.post("/routines/create", response_model=CreateRoutineResponse)
+async def create_routine(request: CreateRoutineRequest):
+    """Create a new routine with the specified exercise IDs."""
+    try:
+        from app.database.operations import store_workout_routine
+        import uuid
+        from datetime import datetime
+        
+        # Generate routine ID
+        routine_id = str(uuid.uuid4())
+        
+        # Create routine data
+        routine_data = {
+            'routine_id': routine_id,
+            'name': request.name,
+            'description': request.description,
+            'exercise_ids': request.exercise_ids,
+            'created_at': datetime.utcnow().isoformat()
+        }
+        
+        # Store in database
+        await store_workout_routine(routine_id, routine_data)
+        
+        logger.info(f"Created routine {routine_id} with {len(request.exercise_ids)} exercises")
+        
+        return CreateRoutineResponse(
+            routine_id=routine_id,
+            name=request.name,
+            exercise_ids=request.exercise_ids,
+            description=request.description,
+            created_at=routine_data['created_at']
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating routine: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create routine: {str(e)}")
 
 @router.get("/health/database")
 async def health_database():

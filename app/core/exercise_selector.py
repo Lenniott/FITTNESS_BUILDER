@@ -489,19 +489,19 @@ Return 5-10 exercises in the order they should be performed.
         exercise_results: List[Dict]
     ) -> Dict:
         """
-        Create the final JSON structure for the UI with all required fields.
+        Create the final JSON structure for the UI with simplified format.
         
-        This function takes the ordered database IDs and creates a comprehensive
+        This function takes the ordered database IDs and creates a simplified
         JSON structure that includes:
-        - UI display fields (exercise_name, how_to, benefits, etc.)
-        - Database operation information (database_id, qdrant_id, video_path)
+        - Exercise IDs for UI to fetch full details
+        - Basic metadata for routine information
         
         Args:
             selected_database_ids: Ordered list of database IDs for the routine
             exercise_results: All exercise results from vector search (for lookup)
             
         Returns:
-            Dictionary with routine data and metadata for UI and database operations
+            Dictionary with routine data in simplified format
         """
         try:
             logger.info(f"Creating final routine JSON for {len(selected_database_ids)} exercises")
@@ -513,49 +513,31 @@ Return 5-10 exercises in the order they should be performed.
                 if database_id:
                     exercise_lookup[str(database_id)] = exercise
             
-            # Build the routine exercises array
+            # Build the routine exercises array with simplified format
             routine_exercises = []
-            routine_metadata = {
-                'total_exercises': len(selected_database_ids),
-                'database_operations': {
-                    'database_ids': [],
-                    'qdrant_ids': [],
-                    'video_paths': []
-                }
-            }
             
             for i, database_id in enumerate(selected_database_ids, 1):
                 exercise_data = exercise_lookup.get(database_id)
                 
                 if exercise_data:
-                    # Create exercise object for UI
+                    # Create simplified exercise object
                     exercise_object = {
                         'order': i,
-                        'exercise_name': exercise_data.get('exercise_name', 'Unknown Exercise'),
-                        'how_to': exercise_data.get('how_to', 'Instructions not available'),
-                        'benefits': exercise_data.get('benefits', 'Benefits not specified'),
-                        'counteracts': exercise_data.get('counteracts', 'Not specified'),
-                        'fitness_level': exercise_data.get('fitness_level', 5),
-                        'rounds_reps': exercise_data.get('rounds_reps', 'Follow video instructions'),
-                        'intensity': exercise_data.get('intensity', 5)
+                        'id': database_id  # Use 'id' to match database field name
                     }
                     
                     routine_exercises.append(exercise_object)
-                    
-                    # Add metadata for database operations
-                    routine_metadata['database_operations']['database_ids'].append(database_id)
-                    routine_metadata['database_operations']['qdrant_ids'].append(exercise_data.get('qdrant_id'))
-                    routine_metadata['database_operations']['video_paths'].append(exercise_data.get('video_path'))
-                    
                     logger.info(f"Added exercise {i}: {exercise_data.get('exercise_name', 'Unknown')}")
                 else:
                     logger.warning(f"Exercise data not found for database ID: {database_id}")
             
-            # Create final JSON structure
+            # Create final JSON structure with simplified format
             final_routine = {
                 'routine': {
                     'exercises': routine_exercises,
-                    'metadata': routine_metadata
+                    'metadata': {
+                        'total_exercises': len(selected_database_ids)
+                    }
                 }
             }
             
@@ -568,12 +550,7 @@ Return 5-10 exercises in the order they should be performed.
                 'routine': {
                     'exercises': [],
                     'metadata': {
-                        'total_exercises': 0,
-                        'database_operations': {
-                            'database_ids': [],
-                            'qdrant_ids': [],
-                            'video_paths': []
-                        }
+                        'total_exercises': 0
                     }
                 }
             }

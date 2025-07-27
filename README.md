@@ -86,25 +86,12 @@ POST /api/v1/generate-routine
   "success": true,
   "routine_id": "359072d3-b5f8-40e9-a79a-81283533c3d6",
   "routine": {
-    "exercises": [
-      {
-        "order": 1,
-        "exercise_name": "Proper Pull-up Technique",
-        "how_to": "Start from a dead hang with shoulders externally rotated...",
-        "benefits": "Increases pull-up strength and protects shoulder joints...",
-        "counteracts": "Beneficial for individuals with sedentary lifestyles...",
-        "fitness_level": 2,
-        "rounds_reps": "Perform 3 sets of 8-12 repetitions...",
-        "intensity": 3
-      }
-    ],
+    "exercise_ids": ["c8c8d8dd-4223-44e9-88c7-f20695bc1e35", "a2de96ab-3d00-4d6f-9da5-0566a5b47002"],
     "metadata": {
       "total_exercises": 5,
-      "database_operations": {
-        "database_ids": ["c8c8d8dd-4223-44e9-88c7-f20695bc1e35"],
-        "qdrant_ids": ["a2de96ab-3d00-4d6f-9da5-0566a5b47002"],
-        "video_paths": ["storage/clips/proper_pull-up_technique_4d046a12.mp4"]
-      }
+      "user_requirements": "I want to get good at pull ups but i can only do 1 at the moment",
+      "target_duration": 900,
+      "intensity_level": "moderate"
     }
   },
   "user_requirements": "I want to get good at pull ups but i can only do 1 at the moment",
@@ -123,6 +110,37 @@ GET /api/v1/routines/{routine_id}
 ```
 
 **Response:** Same structure as Create Routine response
+
+### UI Integration Pattern
+
+The routine generation API is designed for efficient UI integration:
+
+1. **Generate Routine** - Returns exercise IDs only
+2. **Fetch Exercise Details** - Use bulk endpoint to get full exercise data
+
+**Example UI Flow:**
+```typescript
+// 1. Generate routine (returns just IDs)
+const routine = await generateRoutine(prompt);
+
+// 2. Fetch exercise details (same pattern as getExercises)
+const exercises = await getExercisesByIds(routine.exercise_ids);
+
+// 3. Combine for display
+const routineWithExercises = {
+  ...routine,
+  exercises: exercises.map((exercise, index) => ({
+    ...exercise,
+    order: index + 1
+  }))
+};
+```
+
+**Benefits:**
+- **Consistent API pattern** with existing `getExercises`
+- **Reusable exercise fetching logic**
+- **Smaller routine responses**
+- **Better performance** (no data duplication)
 
 ---
 
@@ -262,6 +280,23 @@ GET /api/v1/exercises/{exercise_id}
 ```
 
 **Response:** Single exercise object (same structure as above)
+
+#### Get Multiple Exercises by IDs
+```http
+POST /api/v1/exercises/bulk
+```
+
+**Request Body:**
+```json
+{
+  "exercise_ids": ["c8c8d8dd-4223-44e9-88c7-f20695bc1e35", "a2de96ab-3d00-4d6f-9da5-0566a5b47002"]
+}
+```
+
+**Response:** Array of exercise objects (same structure as individual exercise)
+
+> **UI Integration Pattern:**
+> This endpoint is designed to work with the routine generation API. After generating a routine (which returns `exercise_ids`), use this endpoint to fetch the full exercise details for display in the UI.
 
 #### Search Exercises
 ```http

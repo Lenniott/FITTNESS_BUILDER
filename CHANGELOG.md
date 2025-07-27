@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **New Routine Architecture**: Implemented user-curated routine generation system
+  - **Story Generation Endpoint**: `POST /api/v1/stories/generate` - Creates exercise requirement stories from user prompts
+  - **Semantic Search IDs Endpoint**: `POST /api/v1/exercises/semantic-search-ids` - Returns only exercise IDs for UI curation
+  - **Routine Creation Endpoint**: `POST /api/v1/routines/create` - Stores user-curated exercise lists as routines
+  - **Enhanced Story Generator**: Updated to use fitness coach prompt structure with pain points, counteractions, goals, constraints
+  - **Vectorization Enhancement**: Updated to store PostgreSQL `id` in Qdrant metadata for direct ID mapping
+  - **Migration Script**: Created `migrate_qdrant_add_database_id.py` to add database_id to existing Qdrant points
+
+### Technical Improvements
+- **Database ID Storage**: Qdrant now stores PostgreSQL `id` in metadata for direct lookup
+- **Simplified API Flow**: Story generation → Semantic search → User curation → Routine creation
+- **Better Error Handling**: Enhanced story parsing with JSON and fallback parsing
+- **Performance Optimization**: Direct ID mapping eliminates database lookups
+
 ### Fixed
 - **Instagram Carousel Processing**: Fixed carousel processing to handle all items regardless of URL format
   - Fixed issue where base Instagram URLs (without img_index) only processed first carousel item
