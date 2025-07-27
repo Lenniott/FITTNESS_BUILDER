@@ -11,8 +11,9 @@ import sys
 import time
 from pathlib import Path
 
-# Add the app directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent / 'app'))
+# Add the project root to Python path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv

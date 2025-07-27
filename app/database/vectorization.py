@@ -93,7 +93,8 @@ It helps with {exercise_data['counteracts']} and provides {exercise_data['benefi
             'counteracts': exercise_data['counteracts'],
             'rounds_reps': exercise_data['rounds_reps'],
             'original_url': exercise_data.get('url', ''),
-            'qdrant_id': str(uuid.uuid4())
+            'qdrant_id': str(uuid.uuid4()),
+            'database_id': str(exercise_data['id'])  # Store PostgreSQL ID
         }
         
         # Generate embedding using OpenAI

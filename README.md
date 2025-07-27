@@ -26,8 +26,7 @@ docker-compose up -d --build
 2. **Assign network** to your existing PostgreSQL and Qdrant network
 3. **Mount volumes** for persistent storage:
    - `fitness_storage` → `/app/storage` (individual clip storage)
-   - `fitness_compiled` → `/app/storage/compiled_workouts` (compiled workout videos)
-   - `fitness_temp` → `/app/app/temp` (temporary processing)
+   - `fitness_temp` → `/app/storage/temp` (temporary processing)
 4. **Set environment variables** from your `.env` file
 5. **Expose port** 8000
 
@@ -61,68 +60,175 @@ A **routine** is a complete workout structure containing:
 
 ## 🏋️ ROUTINE MANAGEMENT (CRUD)
 
-### Create Routine
-**Generate intelligent workout routine from user prompt**
+### Story Generation
+**Generate exercise requirement stories from user prompt**
 
 ```http
-POST /api/v1/generate-routine
+POST /api/v1/stories/generate
 ```
 
 **Request Body:**
 ```json
 {
-  "user_prompt": "I want to get good at pull ups but i can only do 1 at the moment",
-  "target_duration": 900,
-  "intensity_level": "moderate",
-  "exercises_per_story": 3,
-  "initial_limit": 40,
-  "score_threshold": 0.3
+  "user_prompt": "I need a quick 5-minute routine I can do at my desk when I stand up, I sit a lot for work",
+  "story_count": 3
 }
 ```
 
 **Response:**
 ```json
 {
-  "success": true,
-  "routine_id": "359072d3-b5f8-40e9-a79a-81283533c3d6",
-  "routine": {
-    "exercises": [
-      {
-        "order": 1,
-        "exercise_name": "Proper Pull-up Technique",
-        "how_to": "Start from a dead hang with shoulders externally rotated...",
-        "benefits": "Increases pull-up strength and protects shoulder joints...",
-        "counteracts": "Beneficial for individuals with sedentary lifestyles...",
-        "fitness_level": 2,
-        "rounds_reps": "Perform 3 sets of 8-12 repetitions...",
-        "intensity": 3
-      }
-    ],
-    "metadata": {
-      "total_exercises": 5,
-      "database_operations": {
-        "database_ids": ["c8c8d8dd-4223-44e9-88c7-f20695bc1e35"],
-        "qdrant_ids": ["a2de96ab-3d00-4d6f-9da5-0566a5b47002"],
-        "video_paths": ["storage/clips/proper_pull-up_technique_4d046a12.mp4"]
-      }
-    }
-  },
-  "user_requirements": "I want to get good at pull ups but i can only do 1 at the moment",
-  "target_duration": 900,
-  "intensity_level": "moderate",
-  "created_at": "2025-07-26 06:08:17.423912",
-  "processing_time": 34.79
+  "stories": [
+    "A quick 5-minute standing routine focused on gentle hip and lower back mobility to counteract the stiffness and discomfort often experienced from prolonged sitting, designed to be performed at a desk with no equipment, encouraging consistent short breaks to improve daily comfort.",
+    "A brief 5-minute standing sequence designed to alleviate tension in the neck, shoulders, and upper back, and to improve posture for individuals who spend long hours hunched over a desk, requiring no specialized equipment and suitable for a non-sweat, office-friendly break."
+  ]
 }
 ```
 
-### Read Routine
-**Retrieve stored routine by ID**
+### Semantic Search (IDs Only)
+**Search for exercises and return only PostgreSQL IDs**
+
+```http
+POST /api/v1/exercises/semantic-search-ids
+```
+
+**Request Body:**
+```json
+{
+  "query": "A quick 5-minute standing routine focused on gentle hip and lower back mobility...",
+  "limit": 5
+}
+```
+
+**Response:**
+```json
+{
+  "exercise_ids": [
+    "047cb042-a3cf-49cc-a763-10290014ac96",
+    "5bb68483-8edc-4a4b-ab4c-371b9b61a237",
+    "10c7c447-c16c-4c37-b4da-28e5d8cdd132"
+  ],
+  "total_found": 3
+}
+```
+
+### Create Routine
+**Create a routine with exercise IDs**
+
+```http
+POST /api/v1/routines
+```
+
+**Request Body:**
+```json
+{
+  "name": "5-Minute Desk Mobility",
+  "description": "A quick standing routine for desk workers",
+  "exercise_ids": [
+    "047cb042-a3cf-49cc-a763-10290014ac96",
+    "5bb68483-8edc-4a4b-ab4c-371b9b61a237",
+    "10c7c447-c16c-4c37-b4da-28e5d8cdd132"
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "routine_id": "57243567-9e4e-4df6-a18d-d4e4ccbd2d38",
+  "name": "5-Minute Desk Mobility",
+  "description": "A quick standing routine for desk workers",
+  "exercise_ids": [
+    "047cb042-a3cf-49cc-a763-10290014ac96",
+    "5bb68483-8edc-4a4b-ab4c-371b9b61a237",
+    "10c7c447-c16c-4c37-b4da-28e5d8cdd132"
+  ],
+  "created_at": "2025-07-27T13:56:39.356021"
+}
+```
+
+### List Routines
+**Get all routines**
+
+```http
+GET /api/v1/routines
+```
+
+**Query Parameters:**
+- `limit` (optional): Number of routines to return (default: 50, max: 100)
+
+**Response:**
+```json
+[
+  {
+    "routine_id": "57243567-9e4e-4df6-a18d-d4e4ccbd2d38",
+    "name": "5-Minute Desk Mobility",
+    "description": "A quick standing routine for desk workers",
+    "exercise_ids": ["047cb042-a3cf-49cc-a763-10290014ac96", "5bb68483-8edc-4a4b-ab4c-371b9b61a237"],
+    "created_at": "2025-07-27 13:56:39.658759+00:00"
+  }
+]
+```
+
+### Get Routine
+**Get a specific routine by ID**
 
 ```http
 GET /api/v1/routines/{routine_id}
 ```
 
 **Response:** Same structure as Create Routine response
+
+### Delete Routine
+**Delete a routine by ID**
+
+```http
+DELETE /api/v1/routines/{routine_id}
+```
+
+**Response:**
+```json
+{
+  "message": "Routine deleted successfully"
+}
+```
+
+### UI Integration Pattern
+
+The new routine system is designed for user-curated workflows:
+
+1. **Generate Stories** - Create exercise requirement stories from user prompt
+2. **Semantic Search** - Find relevant exercises (returns IDs only)
+3. **User Curation** - UI allows user to add/remove exercises
+4. **Create Routine** - Save final curated list as routine
+5. **Fetch Exercise Details** - Use bulk endpoint to get full exercise data
+
+**Example UI Flow:**
+```typescript
+// 1. Generate stories from user prompt
+const stories = await generateStories(userPrompt);
+
+// 2. Search for exercises based on stories
+const exerciseIds = await semanticSearchIds(stories[0]);
+
+// 3. User curates the list in UI (add/remove exercises)
+
+// 4. Create routine with final exercise IDs
+const routine = await createRoutine({
+  name: "My Custom Routine",
+  description: "A personalized workout",
+  exercise_ids: finalExerciseIds
+});
+
+// 5. Fetch full exercise details for display
+const exercises = await getExercisesByIds(routine.exercise_ids);
+```
+
+**Benefits:**
+- **User Control** - Users have full control over exercise selection
+- **Simple Data Structure** - Clean, minimal routine storage
+- **Consistent API Pattern** - Same exercise fetching as existing endpoints
+- **Better Performance** - No complex LLM selection logic
 
 ---
 
@@ -230,8 +336,6 @@ GET /api/v1/exercises
 
 **Query Parameters:**
 - `url` (optional): Filter by source URL
-- `limit` (optional): Number of results (default: 50)
-- `offset` (optional): Pagination offset (default: 0)
 
 **Response:**
 ```json
@@ -263,44 +367,22 @@ GET /api/v1/exercises/{exercise_id}
 
 **Response:** Single exercise object (same structure as above)
 
-#### Search Exercises
+#### Get Multiple Exercises by IDs
 ```http
-POST /api/v1/exercises/search
+POST /api/v1/exercises/bulk
 ```
 
 **Request Body:**
 ```json
 {
-  "query": "push",
-  "fitness_level_min": 3,
-  "fitness_level_max": 7,
-  "intensity_min": 5,
-  "intensity_max": 10,
-  "limit": 20
+  "exercise_ids": ["c8c8d8dd-4223-44e9-88c7-f20695bc1e35", "a2de96ab-3d00-4d6f-9da5-0566a5b47002"]
 }
 ```
 
-#### Semantic Search
-```http
-POST /api/v1/exercises/semantic-search
-```
+**Response:** Array of exercise objects (same structure as individual exercise)
 
-**Request Body:**
-```json
-{
-  "query": "I need a beginner workout for my back that helps with posture",
-  "limit": 10,
-  "score_threshold": 0.7
-}
-```
-
-#### Find Similar Exercises
-```http
-GET /api/v1/exercises/similar/{exercise_id}
-```
-
-**Query Parameters:**
-- `limit` (optional): Number of similar exercises (default: 10, max: 50)
+> **UI Integration Pattern:**
+> This endpoint is designed to work with the routine generation API. After generating a routine (which returns `exercise_ids`), use this endpoint to fetch the full exercise details for display in the UI.
 
 ### Update Exercise
 **Exercises are immutable - updates require reprocessing the video**
@@ -312,49 +394,15 @@ GET /api/v1/exercises/similar/{exercise_id}
 DELETE /api/v1/exercises/{exercise_id}
 ```
 
+**Response:**
+```json
+{
+  "message": "Exercise deleted successfully"
+}
+```
+
 > **Cascade Cleanup:**
 > - This endpoint will remove the exercise from PostgreSQL, delete the associated video file from storage, and remove the vector from Qdrant. All three storage layers are cleaned up automatically.
-
-#### Delete by URL
-```http
-DELETE /api/v1/exercises/url/{url}
-```
-
-#### Delete All Exercises
-```http
-DELETE /api/v1/exercises/all
-```
-
-#### Batch Delete by Criteria
-```http
-DELETE /api/v1/exercises/batch
-```
-
-**Query Parameters:**
-- `fitness_level_min` (optional): Minimum fitness level (0-10)
-- `fitness_level_max` (optional): Maximum fitness level (0-10)
-- `intensity_min` (optional): Minimum intensity (0-10)
-- `intensity_max` (optional): Maximum intensity (0-10)
-- `exercise_name_pattern` (optional): Pattern to match exercise names
-- `created_before` (optional): Delete exercises created before this date (ISO format)
-- `created_after` (optional): Delete exercises created after this date (ISO format)
-
-#### Purge Low Quality Exercises
-```http
-DELETE /api/v1/exercises/purge-low-quality
-```
-
-**Query Parameters:**
-- `fitness_level_threshold` (optional): Delete exercises below this fitness level (default: 3)
-- `intensity_threshold` (optional): Delete exercises below this intensity level (default: 3)
-- `name_patterns` (optional): Comma-separated patterns to match for deletion
-
-#### Preview Deletion
-```http
-GET /api/v1/exercises/deletion-preview
-```
-
-**Query Parameters:** Same as batch delete, but only shows what would be deleted
 
 ---
 
@@ -370,15 +418,65 @@ When you delete an exercise using `DELETE /api/v1/exercises/{exercise_id}`:
 
 This ensures **full cleanup** of all exercise data across the system.
 
+**Response:**
+```json
+{
+  "message": "Exercise deleted successfully"
+}
+```
+
 ---
 
 ## 🔧 UTILITY ENDPOINTS
 
 ### Health Checks
 ```http
+GET /
 GET /health
 GET /api/v1/health/database
 GET /api/v1/health/vector
+```
+
+**Root Health Check Response:**
+```json
+{
+  "message": "Gilgamesh Video Processing API",
+  "status": "healthy"
+}
+```
+
+**Detailed Health Check Response:**
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "services": {
+    "database": "connected",
+    "qdrant": "connected",
+    "ai_services": "available"
+  }
+}
+```
+
+**Database Health Response:**
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "exercises_count": 150
+}
+```
+
+**Vector Health Response:**
+```json
+{
+  "status": "healthy",
+  "vector_db": "connected",
+  "collection_info": {
+    "vectors_count": 150,
+    "points_count": 150
+  }
+}
 ```
 
 ### Statistics
@@ -386,32 +484,48 @@ GET /api/v1/health/vector
 GET /api/v1/stats
 ```
 
-### Cleanup Operations
-```http
-GET /api/v1/cleanup/analysis
-GET /api/v1/cleanup/orphaned-files
-DELETE /api/v1/cleanup/orphaned-files?confirm=true
-DELETE /api/v1/cleanup/temp-files?days_old=7&confirm=true
-GET /api/v1/cleanup/preview
-```
-
-### Generate Clip from Exercise
-```http
-POST /api/v1/exercises/{exercise_id}/generate-clip
+**Response:**
+```json
+{
+  "total_exercises": 150,
+  "avg_fitness_level": 5.2,
+  "avg_intensity": 6.1,
+  "unique_urls": 25
+}
 ```
 
 ---
 
 ## 📡 API Usage Examples
 
-### Generate a Pull-up Progression Routine
+### Generate Exercise Stories
 ```bash
-curl -X POST http://localhost:8000/api/v1/generate-routine \
+curl -X POST http://localhost:8000/api/v1/stories/generate \
   -H "Content-Type: application/json" \
   -d '{
     "user_prompt": "I want to get good at pull ups but i can only do 1 at the moment",
-    "target_duration": 900,
-    "intensity_level": "moderate"
+    "story_count": 3
+  }'
+```
+
+### Search for Exercise IDs
+```bash
+curl -X POST http://localhost:8000/api/v1/exercises/semantic-search-ids \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "I need a beginner workout for my back that helps with posture",
+    "limit": 5
+  }'
+```
+
+### Create a Routine
+```bash
+curl -X POST http://localhost:8000/api/v1/routines \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Pull-up Progression",
+    "description": "A routine to build pull-up strength",
+    "exercise_ids": ["c8c8d8dd-4223-44e9-88c7-f20695bc1e35", "a2de96ab-3d00-4d6f-9da5-0566a5b47002"]
   }'
 ```
 
@@ -425,19 +539,13 @@ curl -X POST http://localhost:8000/api/v1/process \
   }'
 ```
 
-### Search for Back Exercises
+### Get Exercise Details
 ```bash
-curl -X POST http://localhost:8000/api/v1/exercises/semantic-search \
+curl -X POST http://localhost:8000/api/v1/exercises/bulk \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "I need a beginner workout for my back that helps with posture",
-    "limit": 10
+    "exercise_ids": ["c8c8d8dd-4223-44e9-88c7-f20695bc1e35", "a2de96ab-3d00-4d6f-9da5-0566a5b47002"]
   }'
-```
-
-### Get Stored Routine
-```bash
-curl -X GET http://localhost:8000/api/v1/routines/359072d3-b5f8-40e9-a79a-81283533c3d6
 ```
 
 ---
@@ -499,10 +607,15 @@ curl -X POST http://localhost:8000/api/v1/process \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/fitness-video.mp4"}'
 
-# Test semantic search
-curl -X POST http://localhost:8000/api/v1/exercises/semantic-search \
+# Test story generation
+curl -X POST http://localhost:8000/api/v1/stories/generate \
   -H "Content-Type: application/json" \
-  -d '{"query": "I need a beginner workout for my back"}'
+  -d '{"user_prompt": "I need a beginner workout for my back", "story_count": 3}'
+
+# Test semantic search IDs
+curl -X POST http://localhost:8000/api/v1/exercises/semantic-search-ids \
+  -H "Content-Type: application/json" \
+  -d '{"query": "I need a beginner workout for my back", "limit": 5}'
 ```
 
 ## 🌐 UI API Base URL Configuration (LAN, Tailscale, or Public)

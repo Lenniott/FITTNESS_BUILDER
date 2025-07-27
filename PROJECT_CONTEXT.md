@@ -1,128 +1,323 @@
-# Gilgamesh Media Processing Service - Project Context
+# Fitness Builder Project Context
 
-## Project Overview
-Gilgamesh is a modular video processing and AI analysis service that automatically analyzes videos, generates clips, and provides AI-powered curation. The service follows a "serene clarity" design philosophy with natural light, negative space, and textural contrast.
+## Overview
+Fitness Builder is an AI-powered fitness video processing pipeline that extracts exercises from videos, creates clips, and enables semantic search. The system uses a dual-storage architecture with PostgreSQL for metadata and Qdrant for vector embeddings, supporting user-curated routine creation.
 
-## 🎯 **Future Vision: Fitness Knowledge Bank**
+## Project Architecture
 
-### **Core Mission**
-Build a comprehensive fitness knowledge bank with curated exercise clips and on-demand workout routines based on user preferences and requirements.
+### 🏗️ **Core Components**
+- **FastAPI Backend** - REST API for video processing and exercise management
+- **PostgreSQL Database** - Structured metadata storage for exercises and routines
+- **Qdrant Vector Database** - Semantic search and similarity matching
+- **AI Processing Pipeline** - Multi-LLM system for exercise detection and story generation
+- **Video Processing** - FFmpeg-based clip generation and frame extraction
+- **Background Job System** - Async processing with status tracking
 
-### **Key Concepts**
-- **Cut**: Single piece of continuous footage from source video
-- **Clip**: Created content that may combine multiple cuts for better exercise representation
-- **Flow**: Series of exercises done in succession creating one complete movement pattern
-- **Story**: Standalone exercise outcome with problem, goal, and solution
+### 🔄 **Data Flow Architecture**
+1. **Video Input** → Download → Transcribe → Extract Frames → AI Analysis → Generate Clips → Store
+2. **User Prompt** → Story Generation → Semantic Search → User Curation → Routine Creation
+3. **Exercise Data** → PostgreSQL (metadata) + Qdrant (vectors) + File System (clips)
 
-### **User Experience Vision**
-- **On-Demand Workouts**: Personalized routines based on user requirements
-- **Fitness Knowledge Bank**: Curated exercise library with complete movement demonstrations
-- **Social Media Integration**: Smart content extraction from fitness influencers
-- **Quality Curation**: Only high-quality, complete movement demonstrations
-- **Easy Management**: URL tracking for simple content management
+## Folder Structure and Context Files
 
-### **Technical Vision**
-- **JSON Workout Structure**: Structured workout data for easy UI consumption
-- **Multi-Stage Compilation**: Intelligent workout creation pipeline
-- **Quality Validation**: Comprehensive movement range and form validation
-- **Deduplication System**: Variety and effectiveness in workout routines
-- **URL Attribution**: Complete content tracking and management
+### 📁 `/app/api` - REST API Layer
+**Context File:** `app/api/CONTEXT.md`
 
-## Core Architecture
-- **FastAPI Backend**: Modern async web framework with rate limiting and CORS
-- **Modular Structure**: Clear separation between API, core logic, database, services, and utils
-- **PostgreSQL**: Primary database for exercise metadata storage with timing data
-- **Qdrant**: Vector database for AI embeddings and semantic search
-- **AI Providers**: Google Gemini (primary + backup keys, cost-effective) + OpenAI (fallback)
-- **Video Processing**: FFmpeg for clip generation, OpenCV for frame analysis
+**Purpose:** FastAPI application serving as the REST API backend for video processing, exercise management, routine creation, and semantic search.
 
-## Key Components
-- **Video Processing**: yt-dlp for downloads, FFmpeg for clip generation, OpenCV for frame analysis
-- **Audio Processing**: OpenAI Whisper for transcription with Instagram caption handling
-- **AI Analysis**: Exercise detection with Gemini multimodal analysis (automatic fallback between API keys), scene detection, content analysis
-- **Storage**: Permanent clip storage in `storage/clips/` with database metadata
-- **Database**: PostgreSQL for exercise data with start/end timing, Qdrant for vector search
-  - **Note:** Postgres and Qdrant are external services, typically running on the same Docker network in production. They are not part of this project's containers, and the processor connects to them via their network IPs (e.g., `192.168.0.47`) or Docker network aliases.
-- **Testing**: Pytest with async support and coverage reporting
-- **Carousel Support**: Proper Instagram carousel detection and individual item processing
-- **Data Management**: Comprehensive delete endpoints for cleanup across database, vector store, and files
+**Key Files:**
+- **`main.py`** - FastAPI application entry point with middleware and static file serving
+- **`endpoints.py`** - Core API endpoints for all service functionality
+- **`routine_models.py`** - Pydantic models for routine operations (legacy system)
+- **`middleware.py`** - CORS and trusted host middleware configuration
 
-## Major Pipeline & Frame Extraction Updates (2024-07)
-- **Enhanced Frame Extraction**: All frames from the extraction folder are used for AI analysis (no filtering, no artificial limits, consistent naming)
-- **Processor Logic**:
-  - Adds carousel context to the AI prompt (first video in carousel is often an intro/hook, skip if no exercise is present)
-  - Prevents multiple clips with start times within 3 seconds of each other
-  - Consolidates overlapping exercises (>50% overlap)
-  - Extends single exercises to cover the full video duration if needed
-  - Uses improved AI prompt with explicit rules for non-overlapping, non-duplicate, and complete movement detection
-- **Robustness**: The pipeline is now robust against duplicate, overlapping, or fragmented exercise detection
-- **Instagram Carousel Handling**: All videos are downloaded once, and each is processed individually. The system is robust for both single-cut and multi-cut videos, and for carousels with intro/hook videos.
+**API Endpoints:**
+- **Video Processing:** `POST /api/v1/process` - Extract exercises from video URLs
+- **Routine Management:** CRUD operations for user-curated routines
+- **Exercise Management:** CRUD operations with cascade cleanup
+- **Semantic Search:** Story generation and exercise search by IDs
+- **System Health:** Database and vector health checks
+- **Background Jobs:** Job status polling for async processing
 
-## Development Workflow
-1. Local development with docker-compose
-2. Git push to main branch
-3. Portainer image creation from main
-4. Container deployment with UI configuration
+**Integration Points:**
+- **Core Processor** - Video processing pipeline
+- **Database Layer** - PostgreSQL and Qdrant operations
+- **Job System** - Background processing tracking
+- **Story Generation** - AI-powered exercise requirement stories
 
-## Container Volume Configuration
-- **fitness_storage** → `/app/storage` (individual clip storage)
-- **fitness_compiled** → `/app/storage/compiled_workouts` (compiled workout videos)
-- **fitness_temp** → `/app/app/temp` (temporary processing)
-- Video clips are stored in `/app/storage/clips/` inside container
-- Compiled workouts are stored in `/app/storage/compiled_workouts/` inside container
-- Database stores paths relative to container filesystem
+### 📁 `/app/core` - Processing Pipeline
+**Context File:** `app/core/CONTEXT.md`
 
-## Environment Setup
-- Python 3.11+ required
-- FFmpeg for video processing
-- Environment variables for API keys and database connections
-- Docker containerization for production deployment
-- **External Services:** Postgres and Qdrant must be running and accessible on the same Docker network (or via their network IPs) for the processor to function. These are not included in this project's containers.
+**Purpose:** Central processing pipeline and AI-driven components for video processing and exercise analysis.
 
-## Design Philosophy
-- "Invisible made visible" through chaos-to-organization animations
-- Grounded, clear, systems-first approach
-- Avoid gloss/glassmorphism, use natural materials and textures
-- Color palette: off-white, charcoal-navy, olive, rust, muted-gold
-- Typography: Inter + Crimson Text
+**Key Files:**
+- **`processor.py`** - Main video processing pipeline (39KB, 808 lines)
+- **`exercise_story_generator.py`** - Exercise requirement story generation using Gemini LLM
+- **`ai_editor_pipeline.py`** - Empty placeholder for future AI editing functionality
 
-## File Structure
-```
-app/
-├── api/          # FastAPI endpoints and middleware
-├── core/         # Main processing pipeline and AI analysis
-├── database/     # PostgreSQL operations and vectorization
-├── services/     # External services (AI, transcription, storage)
-└── utils/        # Video utilities, clip operations, cleanup
-```
+**Processing Pipeline:**
+1. **Download** - Video and metadata extraction
+2. **Transcribe** - Audio transcription with subtitle parsing
+3. **Extract Frames** - Keyframe extraction for AI analysis
+4. **AI Analysis** - Exercise detection using Gemini LLM
+5. **Generate Clips** - FFmpeg clip creation
+6. **Store Data** - PostgreSQL metadata + Qdrant vectors
+7. **Cleanup** - Temporary file removal
 
-## Dependencies Focus
-- Video processing: yt-dlp, ffmpeg-python, opencv-python-headless
-- AI/ML: openai, google-generativeai, openai-whisper
-- Database: asyncpg, psycopg2-binary, qdrant-client
-- Web framework: fastapi, uvicorn, python-multipart
-- Testing: pytest, pytest-asyncio, pytest-cov
-- Environment: python-dotenv for configuration management
+**AI Components:**
+- **Story Generation** - Converts user prompts to exercise requirements
+- **Exercise Detection** - LLM-based video content analysis
+- **Multi-LLM Architecture** - Different models for different tasks
 
----
+**Integration Points:**
+- **Services Layer** - Video downloading and transcription
+- **Database Layer** - Data storage and retrieval
+- **Utils Layer** - URL processing and frame extraction
+- **API Layer** - Endpoint consumption
 
-## 🔗 **Cross-Document Dependencies**
+### 📁 `/app/database` - Data Persistence Layer
+**Context File:** `app/database/CONTEXT.md`
 
-### **Pipeline Issues Dependencies**
-- **Issue #13-16**: AI Exercise Detection and Validation Issues
-- **Issue #17**: URL Tracking System
-- **Issue #18-22**: Social Media Content and Quality Issues
+**Purpose:** All database-related operations including PostgreSQL metadata storage, Qdrant vector operations, and job status management.
 
-### **AI Pipeline Upgrades Dependencies**
-- **Improvement #1**: Social Media Content Understanding
-- **Improvement #2**: Movement Range Validation
-- **Improvement #3**: URL Tracking System
-- **Improvement #4**: Exercise vs Flow Classification
-- **Improvement #5**: Deduplication System
-- **Improvement #6**: Enhanced Frame Analysis
+**Key Files:**
+- **`operations.py`** - PostgreSQL database operations (22KB, 686 lines)
+- **`vectorization.py`** - Qdrant vector database operations (20KB, 590 lines)
+- **`job_status.py`** - Background job status management (1.5KB, 46 lines)
 
-### **Future Vision Dependencies**
-- **Quality Standards**: Complete movement demonstration requirements
-- **User Experience**: On-demand workout routine generation
-- **Content Management**: URL tracking and attribution systems
-- **Technical Architecture**: JSON workout structure and multi-stage compilation 
+**Database Schema:**
+- **`exercises` table** - Exercise metadata with comprehensive fields
+- **`workout_routines` table** - User-curated routine storage
+- **`exercise_job_status` table** - Background job tracking
+
+**Dual Storage Architecture:**
+- **PostgreSQL** - Structured metadata storage
+- **Qdrant** - Vector embeddings for semantic search
+- **File System** - Video clip storage
+- **Linked IDs** - Consistent data across storage layers
+
+**Key Features:**
+- **Connection Pooling** - Efficient database connection management
+- **Cascade Cleanup** - Complete data removal across all layers
+- **Semantic Search** - Natural language query matching
+- **Diverse Selection** - Intelligent exercise variety
+- **Job Tracking** - Real-time background processing status
+
+**Integration Points:**
+- **Core Processor** - Stores exercise data and embeddings
+- **API Layer** - Retrieves and manages data
+- **Job System** - Tracks background processing
+- **Vector Search** - Provides semantic search capabilities
+
+### 📁 `/app/services` - External Service Integration
+**Context File:** `app/services/CONTEXT.md`
+
+**Purpose:** External service integrations for video downloading, audio transcription, and other specialized processing.
+
+**Key Files:**
+- **`downloaders.py`** - Video download service (6.8KB, 205 lines)
+- **`transcription.py`** - Audio transcription service (11KB, 308 lines)
+
+**Supported Platforms:**
+- **YouTube** - Video downloads with metadata
+- **Instagram** - Posts, reels, and carousel support
+- **TikTok** - Video downloads with metadata
+
+**Transcription Process:**
+1. **Subtitle Check** - Look for existing subtitle files (VTT, SRT, TXT)
+2. **Format Parsing** - Parse subtitle files if found
+3. **Whisper Fallback** - Use OpenAI Whisper if no subtitles
+4. **Quality Validation** - Basic text cleaning and validation
+
+**Key Features:**
+- **Carousel Detection** - Handles Instagram multi-video posts
+- **Metadata Extraction** - Platform-specific data extraction
+- **Subtitle Priority** - Uses existing subtitles when available
+- **Error Handling** - Graceful fallback mechanisms
+
+**Integration Points:**
+- **Core Processor** - Consumes download and transcription results
+- **API Layer** - Provides service results to endpoints
+- **Database Layer** - Stores transcription metadata
+
+### 📁 `/app/utils` - Utility Functions
+**Context File:** `app/utils/CONTEXT.md`
+
+**Purpose:** Specialized utility functions and helper components that support the core processing pipeline.
+
+**Key Files:**
+- **`url_processor.py`** - URL processing utilities (2.9KB, 108 lines)
+- **`enhanced_keyframe_extraction.py`** - Enhanced keyframe extraction (24KB, 512 lines)
+
+**URL Processing Features:**
+- **Carousel Detection** - Identifies Instagram multi-video posts
+- **URL Normalization** - Removes query parameters for consistent processing
+- **Platform Recognition** - Distinguishes between different video platforms
+- **Index Extraction** - Extracts carousel item indices
+
+**Frame Extraction Process:**
+1. **Cut Detection** - Identify scene changes in video
+2. **Frame Extraction** - Extract frames at 8 FPS for each cut segment
+3. **Change Analysis** - Find frames with biggest visual changes
+4. **Rate Constraints** - Apply 1-8 FPS constraints
+5. **Cleanup** - Remove duplicate and low-quality frames
+
+**Key Features:**
+- **Cut Detection** - Identifies scene changes for better frame selection
+- **Adaptive Frame Rate** - 1-8 FPS based on video content
+- **Change Analysis** - Keeps frames with significant visual differences
+- **Optimized Processing** - Fast frame difference calculations
+
+**Integration Points:**
+- **Core Processor** - Consumes URL processing and frame extraction results
+- **Download Service** - Uses URL processing for carousel detection
+- **AI Analysis** - Uses extracted keyframes for exercise detection
+
+## System Integration Patterns
+
+### 🔄 **Video Processing Workflow**
+1. **URL Input** → URL Processing → Download Service → Video Files
+2. **Video Files** → Transcription Service → Transcript Segments
+3. **Video + Transcript** → Frame Extraction → Keyframes
+4. **All Data** → AI Analysis → Exercise Detection
+5. **Detected Exercises** → Clip Generation → Storage (PostgreSQL + Qdrant + Files)
+
+### 🏋️ **Routine Creation Workflow**
+1. **User Prompt** → Story Generation → Exercise Requirements
+2. **Requirements** → Semantic Search → Exercise IDs
+3. **Exercise IDs** → User Curation → Final Selection
+4. **Final Selection** → Routine Creation → Database Storage
+5. **Routine Data** → API Response → UI Display
+
+### 🗄️ **Data Storage Architecture**
+Each exercise consists of three interconnected components:
+1. **PostgreSQL Row** - Metadata stored in `exercises` table
+2. **Video File** - Stored in `storage/clips/` directory
+3. **Qdrant Vector** - AI embedding for semantic search
+
+All components are linked via `qdrant_id` and `database_id` fields.
+
+### 🧹 **Cascade Cleanup Pattern**
+When deleting exercises:
+- PostgreSQL row removal
+- Video file deletion from storage
+- Qdrant vector removal
+- Complete data cleanup across all storage layers
+
+## Technology Stack
+
+### 🏗️ **Backend Framework**
+- **FastAPI** - Modern, fast web framework for building APIs
+- **Pydantic** - Data validation and settings management
+- **Uvicorn** - ASGI server for FastAPI
+
+### 🗄️ **Databases**
+- **PostgreSQL** - Primary metadata storage with asyncpg driver
+- **Qdrant** - Vector database for semantic search and similarity matching
+
+### 🤖 **AI Services**
+- **OpenAI** - Text embedding generation and Whisper transcription
+- **Gemini** - Primary LLM for story generation and exercise detection
+- **Multi-LLM Architecture** - Different models for different tasks
+
+### 🎥 **Video Processing**
+- **FFmpeg** - Video processing and clip generation
+- **OpenCV** - Frame extraction and analysis
+- **yt-dlp** - Video downloading from various platforms
+
+### 🔄 **Async Processing**
+- **asyncio** - Asynchronous programming for non-blocking operations
+- **Background Tasks** - FastAPI feature for long-running operations
+- **Job Status Tracking** - Real-time progress monitoring
+
+## Security and Performance
+
+### 🔒 **Security Considerations**
+- **Environment Variables** - Secure API key and database credential storage
+- **CORS Configuration** - Cross-origin resource sharing (currently permissive)
+- **Input Validation** - Pydantic models provide automatic validation
+- **Error Handling** - Secure error message handling
+
+### ⚡ **Performance Optimizations**
+- **Connection Pooling** - Efficient database connection management
+- **Async Operations** - Non-blocking I/O operations
+- **Background Processing** - Long-running tasks moved to background
+- **Static File Serving** - Direct video clip access
+- **Indexed Queries** - Optimized database search performance
+
+## Deployment Architecture
+
+### 🐳 **Docker Deployment**
+- **Docker Compose** - Multi-service orchestration
+- **Portainer UI** - Container management interface
+- **Volume Mounts** - Persistent storage for clips and temp files
+- **Network Configuration** - External PostgreSQL and Qdrant instances
+
+### 🌐 **Network Configuration**
+- **LAN Access** - Local network deployment
+- **Tailscale** - Secure remote access
+- **Public Access** - Internet-accessible deployment
+- **Static File Serving** - Direct video clip access via `/storage` endpoint
+
+## Current Status
+
+### ✅ **Active Components**
+All folder context files have been created and document the current state:
+- **`/api`** - Complete API layer with all endpoints active
+- **`/core`** - Processing pipeline with AI components active
+- **`/database`** - Dual storage system with all operations active
+- **`/services`** - External service integrations active
+- **`/utils`** - Utility functions for URL processing and frame extraction active
+
+### 🧹 **Clean Architecture**
+- **No Unused Components** - All files are actively used in the system
+- **Well-Documented** - Comprehensive context files for each folder
+- **Consistent Patterns** - Standardized error handling and integration
+- **Technical Debt Addressed** - Removed unused files and imports
+
+### 📊 **System Health**
+- **Dual Storage** - PostgreSQL and Qdrant working together
+- **Multi-LLM** - Different AI models for different tasks
+- **Background Processing** - Async job system for long-running tasks
+- **Error Recovery** - Graceful failure handling throughout
+
+## Future Roadmap
+
+### 🚀 **Scalability Enhancements**
+- **Database Sharding** - Horizontal scaling for large datasets
+- **Vector Clustering** - Efficient vector search for large collections
+- **Caching Layer** - Redis for frequently accessed data
+- **Queue System** - Proper job queuing for high throughput
+
+### 🔧 **Technical Improvements**
+- **Migration System** - Database schema versioning
+- **Backup Strategy** - Automated data backup
+- **Monitoring** - Comprehensive metrics and monitoring
+- **API Documentation** - OpenAPI/Swagger integration
+
+### 🔒 **Security Enhancements**
+- **Authentication/Authorization** - User management system
+- **Rate Limiting** - API endpoint protection
+- **Data Encryption** - Encrypt sensitive data at rest
+- **Audit Logging** - Comprehensive operation logging
+
+## Context File Summary
+
+### 📋 **Available Context Files**
+1. **`app/api/CONTEXT.md`** - API layer documentation and endpoint details
+2. **`app/core/CONTEXT.md`** - Processing pipeline and AI components
+3. **`app/database/CONTEXT.md`** - Database operations and dual storage architecture
+4. **`app/services/CONTEXT.md`** - External service integrations
+5. **`app/utils/CONTEXT.md`** - Utility functions and helper components
+6. **`PROJECT_CONTEXT.md`** - This comprehensive project overview
+
+### 🎯 **Context File Purpose**
+Each context file provides:
+- **File-by-file breakdown** with purposes and functions
+- **Integration patterns** and data flow analysis
+- **Performance characteristics** and optimization strategies
+- **Security considerations** and error handling
+- **Current usage status** and technical debt items
+- **Future considerations** and scalability plans
+
+This comprehensive documentation ensures that developers can quickly understand the system architecture, locate specific functionality, and maintain the codebase effectively. 
