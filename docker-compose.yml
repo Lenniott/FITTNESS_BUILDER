@@ -23,7 +23,6 @@ services:
     volumes:
       - fitness_storage:/app/storage
       - fitness_temp:/app/storage/temp
-      - fitness_compiled:/app/storage/compiled_workouts
     restart: unless-stopped
     networks:
       - fitness_network

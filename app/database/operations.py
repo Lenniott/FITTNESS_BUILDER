@@ -81,15 +81,13 @@ async def init_database():
             ON exercises(normalized_url, carousel_index, exercise_name)
         """)
         
-        # Create workout_routines table
+        # Create workout_routines table (new simple structure)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS workout_routines (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_requirements TEXT NOT NULL,
-                target_duration INTEGER NOT NULL,
-                intensity_level VARCHAR(20) NOT NULL,
-                format VARCHAR(20) DEFAULT 'vertical',
-                routine_data JSONB NOT NULL,
+                name VARCHAR(200) NOT NULL,
+                description TEXT,
+                exercise_ids TEXT[] NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -97,19 +95,11 @@ async def init_database():
 
         # Create indexes for workout_routines
         await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_workout_routines_intensity_level ON workout_routines(intensity_level)
+            CREATE INDEX IF NOT EXISTS idx_workout_routines_name ON workout_routines(name)
         """)
 
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_workout_routines_created_at ON workout_routines(created_at)
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_workout_routines_user_requirements ON workout_routines USING gin(to_tsvector('english', user_requirements))
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_workout_routines_routine_data ON workout_routines USING gin(routine_data)
         """)
         
         logger.info("Database tables initialized")
@@ -165,19 +155,17 @@ async def store_exercise(
         return exercise_id
 
 async def store_workout_routine(
-    user_requirements: str,
-    routine_json: Dict,
-    target_duration: Optional[int] = None,
-    intensity_level: str = "moderate"
+    name: str,
+    description: Optional[str],
+    exercise_ids: List[str]
 ) -> str:
     """
-    Store workout routine JSON in database.
+    Store a simple workout routine in database.
     
     Args:
-        user_requirements: Original user prompt/requirements
-        routine_json: Complete routine JSON structure
-        target_duration: Target duration in seconds (optional)
-        intensity_level: Intensity level (low/moderate/high)
+        name: Routine name
+        description: Routine description (optional)
+        exercise_ids: List of exercise UUIDs as strings
         
     Returns:
         Routine ID (UUID)
@@ -187,19 +175,13 @@ async def store_workout_routine(
     async with pool.acquire() as conn:
         routine_id = str(uuid.uuid4())
         
-        # Calculate target duration if not provided
-        if target_duration is None:
-            exercises = routine_json.get('routine', {}).get('exercises', [])
-            # Estimate 2-3 minutes per exercise
-            target_duration = len(exercises) * 150  # 2.5 minutes per exercise
-        
         await conn.execute("""
             INSERT INTO workout_routines (
-                id, user_requirements, target_duration, intensity_level, routine_data
-            ) VALUES ($1, $2, $3, $4, $5)
-        """, routine_id, user_requirements, target_duration, intensity_level, json.dumps(routine_json))
+                id, name, description, exercise_ids
+            ) VALUES ($1, $2, $3, $4)
+        """, routine_id, name, description, exercise_ids)
         
-        logger.info(f"Stored workout routine: {routine_id} with {len(routine_json.get('routine', {}).get('exercises', []))} exercises")
+        logger.info(f"Stored workout routine: {routine_id} with {len(exercise_ids)} exercises")
         return routine_id
 
 async def get_workout_routine(routine_id: str) -> Optional[Dict]:
@@ -220,10 +202,7 @@ async def get_workout_routine(routine_id: str) -> Optional[Dict]:
         """, routine_id)
         
         if row:
-            routine_data = dict(row)
-            # Parse the JSONB routine_data
-            routine_data['routine_data'] = json.loads(routine_data['routine_data'])
-            return routine_data
+            return dict(row)
         else:
             return None
 
@@ -248,10 +227,7 @@ async def get_recent_workout_routines(limit: int = 10) -> List[Dict]:
         
         routines = []
         for row in rows:
-            routine_data = dict(row)
-            # Parse the JSONB routine_data
-            routine_data['routine_data'] = json.loads(routine_data['routine_data'])
-            routines.append(routine_data)
+            routines.append(dict(row))
         
         return routines
 
@@ -483,8 +459,7 @@ async def _cascade_cleanup_exercise(exercise_data: Dict):
         if video_path:
             await _delete_video_file(video_path)
         
-        # 3. Clean up any compiled workouts that reference this exercise
-        await _cleanup_compiled_workouts(exercise_data.get('url', ''))
+        # 3. Clean up any compiled workouts that reference this exercise (removed - old system)
         
         logger.info(f"Cascade cleanup completed for exercise: {exercise_data.get('exercise_name', 'Unknown')}")
         
@@ -525,33 +500,7 @@ async def _delete_video_file(video_path: str):
     except Exception as e:
         logger.error(f"Error deleting video file {video_path}: {str(e)}")
 
-async def _cleanup_compiled_workouts(source_url: str):
-    """
-    Clean up compiled workouts that reference exercises from a specific URL.
-    
-    Args:
-        source_url: URL of the source video
-    """
-    try:
-        from app.database.compilation_operations import get_compiled_workouts_by_source_url, delete_compiled_workout
-        
-        # Get compiled workouts that reference this source
-        compiled_workouts = await get_compiled_workouts_by_source_url(source_url)
-        
-        for workout in compiled_workouts:
-            # Delete the compiled video file
-            video_path = workout.get('video_path', '')
-            if video_path:
-                await _delete_video_file(video_path)
-            
-            # Delete from database
-            await delete_compiled_workout(workout['id'])
-            
-        if compiled_workouts:
-            logger.info(f"Cleaned up {len(compiled_workouts)} compiled workouts for URL: {source_url}")
-            
-    except Exception as e:
-        logger.error(f"Error cleaning up compiled workouts: {str(e)}")
+# Removed: _cleanup_compiled_workouts function - old workout compilation system
 
 async def delete_exercises_by_url(url: str) -> int:
     """
@@ -712,12 +661,7 @@ async def delete_all_exercises() -> int:
             for exercise_data in exercises:
                 await _cascade_cleanup_exercise(exercise_data)
             
-            # Clean up all compiled workouts
-            try:
-                from app.database.compilation_operations import delete_all_compiled_workouts
-                await delete_all_compiled_workouts()
-            except Exception as e:
-                logger.error(f"Error cleaning up compiled workouts: {str(e)}")
+            # Clean up all compiled workouts (removed - old system)
         
         logger.info(f"Deleted {deleted_count} exercises from database")
         return deleted_count

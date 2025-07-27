@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app
 app = FastAPI(
     title="Gilgamesh Video Processing API",
-    description="AI-powered video processing and exercise clip extraction with workout compilation",
+    description="AI-powered video processing and exercise clip extraction with user-curated routines",
     version="1.0.0"
 )
 
@@ -41,9 +41,7 @@ setup_middleware(app)
 # Include routers
 app.include_router(router, prefix="/api/v1")
 
-# Include compilation endpoints
-from app.api.compilation_endpoints import router as compilation_router
-app.include_router(compilation_router, prefix="/api/v1")
+# Removed: Workout compilation endpoints - Old system, replaced with user-curated routines
 
 @app.get("/")
 async def root():

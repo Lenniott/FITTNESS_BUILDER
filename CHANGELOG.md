@@ -2,9 +2,157 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-07-27] - Clean Routine System Implementation
+
+### Added
+- **Clean Routine System**: Completely redesigned routine architecture with simple, user-curated approach:
+  - `POST /api/v1/stories/generate` - Generate exercise requirement stories from user prompts
+  - `POST /api/v1/exercises/semantic-search-ids` - Search for exercises and return only IDs
+  - `POST /api/v1/routines` - Create routines with exercise IDs
+  - `GET /api/v1/routines` - List all routines
+  - `GET /api/v1/routines/{routine_id}` - Get specific routine
+  - `DELETE /api/v1/routines/{routine_id}` - Delete routine
+- **Database Migration**: Created `migration_clean_routines_table.sql` to replace complex JSONB structure with simple table
+- **Enhanced Story Generator**: Updated to use `gemini-2.5-flash` with detailed "fitness coach" prompts
+- **Vectorization Enhancement**: Modified `store_embedding` to include PostgreSQL `id` as `database_id` in Qdrant metadata
+- **Migration Script**: Created `migrate_qdrant_add_database_id.py` to backfill existing Qdrant points with `database_id`
+- **API Contract Documentation**: Updated README with comprehensive API documentation for UI integration
+
+### Changed
+- **Simplified Database Schema**: Replaced complex `workout_routines` table with clean structure:
+  - `id` (UUID, primary key)
+  - `name` (VARCHAR)
+  - `description` (TEXT, optional)
+  - `exercise_ids` (TEXT array)
+  - `created_at` and `updated_at` timestamps
+- **Removed Complex Logic**: Eliminated old RAG pipeline endpoints and complex routine generation
+- **Streamlined API**: All routine operations now use simple CRUD pattern
+
+### Removed
+- **Old Workout Compilation System**: Removed entire workout compilation pipeline (`/workout/*` endpoints) - replaced with user-curated routines
+- **Complex Search Endpoints**: Removed redundant search endpoints:
+  - `POST /api/v1/exercises/semantic-search` (redundant with semantic-search-ids)
+  - `POST /api/v1/exercises/search` (redundant with semantic search)
+  - `GET /api/v1/exercises/similar/{exercise_id}` (not used in new workflow)
+- **Dangerous Deletion Endpoints**: Removed complex deletion endpoints:
+  - `DELETE /api/v1/exercises/all` (too dangerous)
+  - `DELETE /api/v1/exercises/url/{url:path}` (not needed)
+  - `DELETE /api/v1/exercises/batch` (too complex)
+  - `DELETE /api/v1/exercises/purge-low-quality` (too complex)
+  - `GET /api/v1/exercises/deletion-preview` (not needed)
+- **Unused Utility Endpoints**: Removed unused endpoints:
+  - `POST /api/v1/exercises/{exercise_id}/generate-clip` (not used)
+  - All cleanup endpoints (`/cleanup/*`) - not needed for core functionality
+- **Total Cleanup**: Removed 15+ unnecessary endpoints, resulting in a clean, focused API with only essential functionality
+- **Complete File Cleanup**: Deleted 8 files from old workout compilation system:
+  - `app/api/compilation_endpoints.py` - Old workout compilation API endpoints
+  - `app/core/workout_compiler.py` - Main workout compilation pipeline
+  - `app/database/compilation_operations.py` - Database operations for compiled workouts
+  - `app/utils/cleanup_utils.py` - Cleanup utilities (removed with cleanup endpoints)
+  - `examples/workout_compilation_example.py` - Example for old workout system
+  - `examples/cascade_deletion_example.py` - Example for old cleanup system
+  - `tests/unit/test_workout_compiler.py` - Tests for workout compiler
+  - `tests/unit/test_exercise_selector.py` - Tests for old exercise selector
+- **Database Schema Cleanup**: Removed references to `compiled_workouts` table and cleanup functions
+- **Docker Configuration**: Removed `fitness_compiled` volume from docker-compose.yml
+
 ## [Unreleased]
 
 ### Added
+- **Comprehensive Test Suite**: Created comprehensive test coverage for all endpoints and components:
+  - **`tests/integration/test_api_endpoints.py`** - Complete API endpoint testing covering all 15 endpoints
+  - **`tests/integration/test_database_operations.py`** - Database integration tests for PostgreSQL and Qdrant
+  - **`tests/run_all_tests.py`** - Comprehensive test runner with detailed reporting
+  - **`tests/CONTEXT.md`** - Complete test documentation and analysis
+  - **`tests/conftest.py`** - Pytest configuration with proper Python path setup
+  - **`tests/test_api_simple.py`** - Simple API test script for quick validation
+
+### Fixed
+- **Routine API UUID Mismatch**: Fixed critical bug where routine creation returned wrong UUID:
+  - Updated `create_routine` endpoint to use database-generated UUID instead of generating separate UUID
+  - Fixed routine retrieval 404 errors by ensuring consistent UUID handling
+  - Restarted API server to apply code changes
+  - Added comprehensive test coverage for routine CRUD operations
+- **Database Schema Mismatch**: Fixed routine table schema to match API expectations:
+  - Updated `workout_routines` table schema to use simple structure (name, description, exercise_ids)
+  - Fixed routine retrieval endpoint to use correct UUID field from database
+  - Removed old complex routine system fields from database schema
+  - Added proper indexes for new routine structure
+- **Test Import Issues**: Fixed Python module import problems in test files:
+  - Added proper Python path setup in all test files
+  - Created `conftest.py` for centralized pytest configuration
+  - Updated test runner to set PYTHONPATH environment variable
+  - Fixed import paths in database and integration tests
+- **Project Context Documentation**: Created comprehensive `PROJECT_CONTEXT.md` file providing:
+  - Complete project overview and architecture documentation
+  - Detailed breakdown of all folder context files and their purposes
+  - System integration patterns and data flow analysis
+  - Technology stack documentation and deployment architecture
+  - Security considerations and performance optimizations
+  - Current status and future roadmap
+  - Comprehensive guide to all available context files
+- **Database Folder Context Documentation**: Created comprehensive `app/database/CONTEXT.md` file documenting:
+  - Complete file structure and responsibilities for all database components
+  - Detailed database documentation including PostgreSQL operations and vector database operations
+  - Dual storage architecture patterns and data consistency strategies
+  - Performance optimizations and connection management
+  - Security considerations and testing strategies
+  - Current usage status and integration patterns
+  - Comprehensive documentation of the dual storage system (PostgreSQL + Qdrant)
+- **Utils Folder Context Documentation**: Created comprehensive `app/utils/CONTEXT.md` file documenting:
+  - Complete file structure and responsibilities for all utility components
+  - Detailed utility documentation including URL processing and frame extraction
+  - Utility integration patterns and data flow analysis
+  - Error handling strategies and performance optimizations
+  - Security considerations and testing strategies
+  - Current usage status and technical debt items
+  - Identified unused `file_validation.py` and `frame_type_extractor.py` utilities that were created but never integrated
+- **Services Folder Context Documentation**: Created comprehensive `app/services/CONTEXT.md` file documenting:
+  - Complete file structure and responsibilities for all service components
+  - Detailed service documentation including video downloading and audio transcription
+  - Service integration patterns and data flow analysis
+  - Error handling strategies and performance optimizations
+  - Security considerations and testing strategies
+  - Current usage status and technical debt items
+  - Identified unused `enhanced_transcription.py` service that was created but never integrated
+- **Core Folder Context Documentation**: Created comprehensive `app/core/CONTEXT.md` file documenting:
+  - Complete file structure and responsibilities for all core processing components
+  - Detailed pipeline documentation including video processing, story generation, and exercise selection
+  - Multi-LLM architecture patterns and AI-driven decision making
+  - Error handling strategies and fallback mechanisms
+  - Performance optimizations and integration points
+  - Security considerations and testing strategies
+  - Future considerations and technical debt items
+- **API Folder Context Documentation**: Created comprehensive `app/api/CONTEXT.md` file documenting:
+  - Complete file structure and responsibilities for all API components
+  - Detailed endpoint documentation with categories and functionality
+  - Architecture patterns including background processing and user-curated workflows
+  - Error handling strategies and security considerations
+  - Performance optimizations and integration points
+  - Deprecated features and future considerations
+  - Testing strategies and technical debt items
+
+### Fixed
+- **Technical Debt Cleanup**: Removed unused import of `compilation_endpoints` from `app/api/endpoints.py`
+  - The `compilation_endpoints.py` file was deleted but the import statement remained
+  - Replaced with comment explaining the removal
+  - Eliminates potential import errors and improves code cleanliness
+- **Legacy Component Cleanup**: Removed unused import of `exercise_selector` from `app/api/endpoints.py`
+  - The `exercise_selector` was part of the old complex routine system that was replaced with user-curated routines
+  - Updated core context documentation to reflect that `exercise_selector.py` is legacy and not currently used
+  - Clarified that the current system uses only 2 LLMs instead of 3 (story generation + video processing)
+- **Legacy File Deletion**: Deleted `app/core/exercise_selector.py` - completely unused legacy component
+  - The file was part of the old complex routine system and had no current usage
+  - Updated core context documentation to remove references to the deleted file
+  - Simplified the architecture to reflect only the 2 currently used LLMs
+- **Unused Service Cleanup**: Deleted `app/services/enhanced_transcription.py` - unused enhanced transcription service
+  - The enhanced transcription service was created but never integrated into the system
+  - Updated services context documentation to reflect the clean, focused service structure
+  - Simplified the services folder to only contain actively used components
+- **Unused Utilities Cleanup**: Deleted `app/utils/file_validation.py` and `app/utils/frame_type_extractor.py` - unused utility components
+  - Both utilities were created but never integrated into the processing pipeline
+  - Updated utils context documentation to reflect the clean, focused utility structure
+  - Simplified the utils folder to only contain actively used components (URL processing and frame extraction)
 - **New Routine Architecture**: Implemented user-curated routine generation system
   - **Story Generation Endpoint**: `POST /api/v1/stories/generate` - Creates exercise requirement stories from user prompts
   - **Semantic Search IDs Endpoint**: `POST /api/v1/exercises/semantic-search-ids` - Returns only exercise IDs for UI curation
