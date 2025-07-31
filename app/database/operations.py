@@ -102,6 +102,33 @@ async def init_database():
             CREATE INDEX IF NOT EXISTS idx_workout_routines_created_at ON workout_routines(created_at)
         """)
         
+        # Create exercise_stories table for cached exercise requirement stories
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS exercise_stories (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                original_prompt TEXT NOT NULL,
+                story_text TEXT NOT NULL,
+                prompt_hash VARCHAR(64) NOT NULL,
+                qdrant_id UUID NOT NULL,
+                usage_count INTEGER DEFAULT 1,
+                last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create indexes for exercise_stories
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exercise_stories_prompt_hash ON exercise_stories(prompt_hash)
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exercise_stories_last_used ON exercise_stories(last_used_at)
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exercise_stories_usage_count ON exercise_stories(usage_count)
+        """)
+        
         logger.info("Database tables initialized")
 
 async def store_exercise(
@@ -665,6 +692,156 @@ async def delete_all_exercises() -> int:
         
         logger.info(f"Deleted {deleted_count} exercises from database")
         return deleted_count
+
+async def store_exercise_story(
+    original_prompt: str,
+    story_text: str,
+    prompt_hash: str,
+    qdrant_id: str
+) -> str:
+    """
+    Store an exercise story in the database.
+    
+    Args:
+        original_prompt: The user's original prompt
+        story_text: The generated story text
+        prompt_hash: SHA-256 hash of the normalized prompt
+        qdrant_id: Vector database reference ID
+        
+    Returns:
+        Story ID (UUID)
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        result = await conn.fetchrow("""
+            INSERT INTO exercise_stories (original_prompt, story_text, prompt_hash, qdrant_id)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+        """, original_prompt, story_text, prompt_hash, qdrant_id)
+        
+        story_id = str(result['id'])
+        logger.info(f"Stored exercise story with ID: {story_id}")
+        return story_id
+
+async def get_story_by_hash(prompt_hash: str) -> Optional[Dict]:
+    """
+    Get an exercise story by its prompt hash.
+    
+    Args:
+        prompt_hash: SHA-256 hash of the normalized prompt
+        
+    Returns:
+        Story data or None if not found
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        result = await conn.fetchrow("""
+            SELECT id, original_prompt, story_text, prompt_hash, qdrant_id, 
+                   usage_count, last_used_at, created_at
+            FROM exercise_stories 
+            WHERE prompt_hash = $1
+            ORDER BY usage_count DESC, last_used_at DESC
+            LIMIT 1
+        """, prompt_hash)
+        
+        if result:
+            return {
+                'id': str(result['id']),
+                'original_prompt': result['original_prompt'],
+                'story_text': result['story_text'],
+                'prompt_hash': result['prompt_hash'],
+                'qdrant_id': str(result['qdrant_id']),
+                'usage_count': result['usage_count'],
+                'last_used_at': result['last_used_at'],
+                'created_at': result['created_at']
+            }
+        return None
+
+async def update_story_usage(story_id: str) -> bool:
+    """
+    Update the usage count and last used timestamp for a story.
+    
+    Args:
+        story_id: The story ID to update
+        
+    Returns:
+        True if updated successfully
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE exercise_stories 
+            SET usage_count = usage_count + 1, 
+                last_used_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+        """, story_id)
+        
+        updated = result.startswith("UPDATE 1")
+        if updated:
+            logger.info(f"Updated usage for story ID: {story_id}")
+        return updated
+
+async def search_stories(limit: int = 50) -> List[Dict]:
+    """
+    Get all exercise stories ordered by usage.
+    
+    Args:
+        limit: Maximum number of stories to return
+        
+    Returns:
+        List of story data
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, original_prompt, story_text, prompt_hash, qdrant_id,
+                   usage_count, last_used_at, created_at
+            FROM exercise_stories 
+            ORDER BY usage_count DESC, last_used_at DESC
+            LIMIT $1
+        """, limit)
+        
+        stories = []
+        for row in rows:
+            stories.append({
+                'id': str(row['id']),
+                'original_prompt': row['original_prompt'],
+                'story_text': row['story_text'],
+                'prompt_hash': row['prompt_hash'],
+                'qdrant_id': str(row['qdrant_id']),
+                'usage_count': row['usage_count'],
+                'last_used_at': row['last_used_at'],
+                'created_at': row['created_at']
+            })
+        
+        logger.info(f"Retrieved {len(stories)} exercise stories")
+        return stories
+
+async def delete_story(story_id: str) -> bool:
+    """
+    Delete an exercise story from the database.
+    
+    Args:
+        story_id: The story ID to delete
+        
+    Returns:
+        True if deleted successfully
+    """
+    pool = await get_database_connection()
+    
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            DELETE FROM exercise_stories WHERE id = $1
+        """, story_id)
+        
+        deleted = result.startswith("DELETE 1")
+        if deleted:
+            logger.info(f"Deleted story ID: {story_id}")
+        return deleted
 
 async def close_database():
     """Close database connection pool."""

@@ -58,6 +58,27 @@ class StoryGenerationRequest(BaseModel):
 class StoryGenerationResponse(BaseModel):
     stories: List[str]
 
+class CachedStoryResponse(BaseModel):
+    id: str
+    original_prompt: str
+    story_text: str
+    prompt_hash: str
+    qdrant_id: str
+    usage_count: int
+    last_used_at: str
+    created_at: str
+
+class StoryStatsResponse(BaseModel):
+    total_stories: int
+    total_usage: int
+    avg_usage: float
+    most_used_count: int
+
+class StoryCacheRequest(BaseModel):
+    user_prompt: str
+    story_count: int = 5
+    similarity_threshold: float = 0.8
+
 class ProcessResponse(BaseModel):
     success: bool
     processed_clips: List[Dict]
@@ -321,21 +342,137 @@ async def get_exercises_bulk(request: BulkExerciseRequest):
 
 @router.post("/stories/generate", response_model=StoryGenerationResponse)
 async def generate_exercise_stories(request: StoryGenerationRequest):
-    """Generate exercise requirement stories from user prompt."""
+    """Generate exercise requirement stories from user prompt with smart caching."""
     try:
-        from app.core.exercise_story_generator import generate_exercise_stories
+        from app.core.exercise_story_cache import generate_cached_exercise_stories
         
-        logger.info(f"Generating {request.story_count} exercise stories for prompt: {request.user_prompt}")
+        logger.info(f"Generating {request.story_count} exercise stories (with caching) for prompt: {request.user_prompt}")
         
-        stories = generate_exercise_stories(request.user_prompt, request.story_count)
+        # Use cached story generation by default for better performance and cost reduction
+        stories = await generate_cached_exercise_stories(
+            user_prompt=request.user_prompt,
+            story_count=request.story_count,
+            similarity_threshold=0.8  # Default threshold for good similarity matching
+        )
         
-        logger.info(f"Generated {len(stories)} exercise stories")
+        logger.info(f"Retrieved/generated {len(stories)} exercise stories")
         return StoryGenerationResponse(stories=stories)
         
     except Exception as e:
         error_msg = escape_error_message(e)
         logger.error(f"Error generating exercise stories: {error_msg}")
         raise HTTPException(status_code=500, detail=f"Failed to generate exercise stories: {error_msg}")
+
+@router.post("/stories/cached", response_model=StoryGenerationResponse)
+async def generate_cached_exercise_stories(request: StoryCacheRequest):
+    """Generate exercise stories with smart caching and reuse."""
+    try:
+        from app.core.exercise_story_cache import generate_cached_exercise_stories
+        
+        logger.info(f"Generating cached stories for prompt: {request.user_prompt}")
+        
+        stories = await generate_cached_exercise_stories(
+            user_prompt=request.user_prompt,
+            story_count=request.story_count,
+            similarity_threshold=request.similarity_threshold
+        )
+        
+        logger.info(f"Retrieved/generated {len(stories)} cached stories")
+        return StoryGenerationResponse(stories=stories)
+        
+    except Exception as e:
+        error_msg = escape_error_message(e)
+        logger.error(f"Error generating cached exercise stories: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate cached exercise stories: {error_msg}")
+
+@router.get("/stories/cached", response_model=List[CachedStoryResponse])
+async def list_cached_stories(limit: int = Query(50, description="Maximum number of stories to return")):
+    """List all cached exercise stories ordered by usage."""
+    try:
+        from app.database.operations import search_stories
+        
+        stories = await search_stories(limit=limit)
+        
+        cached_stories = []
+        for story in stories:
+            cached_stories.append(CachedStoryResponse(
+                id=story['id'],
+                original_prompt=story['original_prompt'],
+                story_text=story['story_text'],
+                prompt_hash=story['prompt_hash'],
+                qdrant_id=story['qdrant_id'],
+                usage_count=story['usage_count'],
+                last_used_at=story['last_used_at'].isoformat() if story['last_used_at'] else "",
+                created_at=story['created_at'].isoformat() if story['created_at'] else ""
+            ))
+        
+        logger.info(f"Retrieved {len(cached_stories)} cached stories")
+        return cached_stories
+        
+    except Exception as e:
+        error_msg = escape_error_message(e)
+        logger.error(f"Error listing cached stories: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to list cached stories: {error_msg}")
+
+@router.get("/stories/stats", response_model=StoryStatsResponse)
+async def get_story_cache_stats():
+    """Get statistics about the story cache."""
+    try:
+        from app.core.exercise_story_cache import get_cached_story_stats
+        
+        stats = await get_cached_story_stats()
+        
+        return StoryStatsResponse(
+            total_stories=stats['total_stories'],
+            total_usage=stats['total_usage'],
+            avg_usage=stats['avg_usage'],
+            most_used_count=stats['most_used_count']
+        )
+        
+    except Exception as e:
+        error_msg = escape_error_message(e)
+        logger.error(f"Error getting story cache stats: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to get story cache stats: {error_msg}")
+
+@router.delete("/stories/cached/{story_id}")
+async def delete_cached_story(story_id: str):
+    """Delete a cached story from both database and vector store."""
+    try:
+        from app.database.operations import delete_story
+        from app.database.vectorization import delete_story_embedding
+        
+        # Get story data first to get the qdrant_id
+        from app.database.operations import search_stories
+        stories = await search_stories(limit=1000)  # Get all to find the specific one
+        
+        target_story = None
+        for story in stories:
+            if story['id'] == story_id:
+                target_story = story
+                break
+        
+        if not target_story:
+            raise HTTPException(status_code=404, detail="Story not found")
+        
+        # Delete from vector store
+        qdrant_id = target_story['qdrant_id']
+        vector_deleted = await delete_story_embedding(qdrant_id)
+        
+        # Delete from database
+        db_deleted = await delete_story(story_id)
+        
+        if db_deleted:
+            logger.info(f"Deleted cached story: {story_id}")
+            return {"message": "Cached story deleted successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete story from database")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = escape_error_message(e)
+        logger.error(f"Error deleting cached story: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete cached story: {error_msg}")
 
 # Removed: POST /api/v1/exercises/search - Redundant with semantic search
 # Removed: GET /api/v1/exercises/similar/{exercise_id} - Not used in new workflow

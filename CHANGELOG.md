@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-01-28] - Exercise Story Caching System
+
+### Added
+- **Exercise Story Caching System**: Intelligent story reuse to reduce LLM costs and improve response times:
+  - `exercise_stories` table in PostgreSQL for story metadata and usage tracking
+  - Vector storage in Qdrant for semantic story search and similarity matching
+  - Smart cache lookup with configurable similarity thresholds (default 0.8)
+  - Usage tracking with `usage_count` and `last_used_at` for analytics
+- **New API Endpoints for Story Management**:
+  - `POST /api/v1/stories/cached` - Generate stories with smart caching and custom threshold
+  - `GET /api/v1/stories/cached` - List all cached stories ordered by usage
+  - `GET /api/v1/stories/stats` - Get cache statistics (total stories, usage metrics)
+  - `DELETE /api/v1/stories/cached/{story_id}` - Delete cached story with cascade cleanup
+- **Smart Story Generation Logic** (`app/core/exercise_story_cache.py`):
+  - Exact prompt hash matching for identical requests
+  - Vector similarity search for similar prompts (configurable threshold)
+  - Automatic caching of new stories with embeddings
+  - Usage analytics and cache performance tracking
+- **Enhanced Database Operations** (`app/database/operations.py`):
+  - `store_exercise_story()` - Store new story with metadata
+  - `get_story_by_hash()` - Fast exact prompt matching
+  - `update_story_usage()` - Track story reuse analytics
+  - `search_stories()` - List stories ordered by usage
+  - `delete_story()` - Remove story from database
+- **Enhanced Vector Operations** (`app/database/vectorization.py`):
+  - `store_story_embedding()` - Store story vectors with metadata filters
+  - `search_similar_stories()` - Vector search with content_type filtering
+  - `delete_story_embedding()` - Remove story vectors from Qdrant
+  - Content type filtering to separate story and exercise vectors
+
+### Changed
+- **Default Story Generation**: Updated `POST /api/v1/stories/generate` to use caching by default
+  - Maintains backward compatibility while providing cost savings
+  - Automatic fallback to original generator if caching fails
+  - Improved response times for similar user requests
+- **Database Schema**: Extended with `exercise_stories` table including:
+  - `id` (UUID, primary key)
+  - `original_prompt` (TEXT) - User's original request
+  - `story_text` (TEXT) - Generated story content
+  - `prompt_hash` (VARCHAR(64)) - SHA-256 hash for exact matching
+  - `qdrant_id` (UUID) - Vector database reference
+  - `usage_count` (INTEGER) - Track story reuse frequency
+  - `last_used_at` and `created_at` timestamps
+- **Vector Storage Strategy**: Extended existing Qdrant collection with content type filtering
+  - Stories stored alongside exercises with `content_type: exercise_story` metadata
+  - Efficient filtering prevents story/exercise result mixing
+  - Reuses existing embedding model and infrastructure
+
+### Benefits
+- **Cost Reduction**: Significant savings on Gemini LLM calls for repeated similar prompts
+- **Performance**: Faster response times for cached story retrieval vs. fresh generation
+- **Analytics**: Usage tracking provides insights into common user requirements
+- **Scalability**: Vector similarity search scales efficiently with story volume
+- **Backward Compatibility**: Existing API endpoints work unchanged
+
 ## [2025-07-27] - Clean Routine System Implementation
 
 ### Added

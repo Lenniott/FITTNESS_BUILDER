@@ -85,6 +85,78 @@ POST /api/v1/stories/generate
 }
 ```
 
+> **⚡ Smart Caching**: This endpoint now uses intelligent caching to reuse similar stories, reducing LLM costs and improving response times. Stories are automatically cached and reused for similar prompts.
+
+### Advanced Story Generation with Custom Caching
+**Generate exercise stories with configurable similarity threshold**
+
+```http
+POST /api/v1/stories/cached
+```
+
+**Request Body:**
+```json
+{
+  "user_prompt": "I want to get good at pull ups but i can only do 1 at the moment",
+  "story_count": 3,
+  "similarity_threshold": 0.8
+}
+```
+
+**Response:** Same format as standard story generation
+
+### Cached Story Management
+
+#### List Cached Stories
+```http
+GET /api/v1/stories/cached?limit=50
+```
+
+**Response:**
+```json
+[
+  {
+    "id": "123e4567-e89b-12d3-a456-426614174000",
+    "original_prompt": "I need a beginner workout for my back",
+    "story_text": "A beginner-friendly back workout focusing on...",
+    "prompt_hash": "a1b2c3d4...",
+    "qdrant_id": "456e7890-e89b-12d3-a456-426614174111",
+    "usage_count": 5,
+    "last_used_at": "2025-01-28T10:30:00Z",
+    "created_at": "2025-01-25T14:20:00Z"
+  }
+]
+```
+
+#### Story Cache Statistics
+```http
+GET /api/v1/stories/stats
+```
+
+**Response:**
+```json
+{
+  "total_stories": 25,
+  "total_usage": 127,
+  "avg_usage": 5.08,
+  "most_used_count": 15
+}
+```
+
+#### Delete Cached Story
+```http
+DELETE /api/v1/stories/cached/{story_id}
+```
+
+**Response:**
+```json
+{
+  "message": "Cached story deleted successfully"
+}
+```
+
+> **💰 Cost Optimization**: The story caching system provides significant cost savings by reusing similar stories instead of generating new ones. Stories with similarity scores above the threshold (default 0.8) are automatically reused and their usage count is incremented.
+
 ### Semantic Search (IDs Only)
 **Search for exercises and return only PostgreSQL IDs**
 
@@ -498,7 +570,7 @@ GET /api/v1/stats
 
 ## 📡 API Usage Examples
 
-### Generate Exercise Stories
+### Generate Exercise Stories (with Smart Caching)
 ```bash
 curl -X POST http://localhost:8000/api/v1/stories/generate \
   -H "Content-Type: application/json" \
@@ -506,6 +578,32 @@ curl -X POST http://localhost:8000/api/v1/stories/generate \
     "user_prompt": "I want to get good at pull ups but i can only do 1 at the moment",
     "story_count": 3
   }'
+```
+
+### Generate Cached Stories with Custom Threshold
+```bash
+curl -X POST http://localhost:8000/api/v1/stories/cached \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_prompt": "I need shoulder strengthening exercises for desk workers",
+    "story_count": 2,
+    "similarity_threshold": 0.85
+  }'
+```
+
+### List Cached Stories
+```bash
+curl -X GET "http://localhost:8000/api/v1/stories/cached?limit=10"
+```
+
+### Get Story Cache Statistics
+```bash
+curl -X GET http://localhost:8000/api/v1/stories/stats
+```
+
+### Delete Cached Story
+```bash
+curl -X DELETE http://localhost:8000/api/v1/stories/cached/123e4567-e89b-12d3-a456-426614174000
 ```
 
 ### Search for Exercise IDs

@@ -587,3 +587,154 @@ def _categorize_exercise_type(exercise_name: str) -> str:
         return 'floor'
     
     return 'other'
+
+async def store_story_embedding(
+    story_text: str,
+    original_prompt: str,
+    prompt_hash: str,
+    database_id: str
+) -> str:
+    """
+    Store exercise story embedding in Qdrant.
+    
+    Args:
+        story_text: The generated story text to embed
+        original_prompt: The user's original prompt
+        prompt_hash: SHA-256 hash of the normalized prompt
+        database_id: PostgreSQL story ID
+        
+    Returns:
+        Qdrant point ID
+    """
+    try:
+        # Create comprehensive text chunk for embedding
+        text_chunk = f"""
+User Requirements: {original_prompt}
+
+Exercise Story: {story_text}
+
+This story describes exercise requirements and user needs for fitness routines.
+        """.strip()
+        
+        # Create metadata for filtering and retrieval
+        metadata = {
+            'content_type': 'exercise_story',
+            'original_prompt': original_prompt,
+            'story_text': story_text,
+            'prompt_hash': prompt_hash,
+            'database_id': database_id,
+            'qdrant_id': str(uuid.uuid4())
+        }
+        
+        # Generate embedding using OpenAI
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text_chunk
+        )
+        
+        embedding = response.data[0].embedding
+        
+        # Store in Qdrant (same collection as exercises, differentiated by content_type)
+        qdrant_client = get_qdrant_client()
+        point_id = metadata['qdrant_id']
+        
+        qdrant_client.upsert(
+            collection_name="fitness_video_clips",
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=embedding,
+                    payload=metadata
+                )
+            ]
+        )
+        
+        logger.info(f"Stored story embedding in Qdrant with ID: {point_id}")
+        return point_id
+        
+    except Exception as e:
+        logger.error(f"Error storing story embedding: {str(e)}")
+        raise
+
+async def search_similar_stories(
+    query: str,
+    limit: int = 5,
+    score_threshold: float = 0.7
+) -> List[Dict]:
+    """
+    Search for similar exercise stories using vector search.
+    
+    Args:
+        query: Search query (user prompt)
+        limit: Maximum number of results
+        score_threshold: Minimum similarity score
+        
+    Returns:
+        List of similar stories with scores
+    """
+    try:
+        # Generate embedding for the query
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=query
+        )
+        
+        query_embedding = response.data[0].embedding
+        
+        # Search in Qdrant with content_type filter
+        qdrant_client = get_qdrant_client()
+        search_result = qdrant_client.search(
+            collection_name="fitness_video_clips",
+            query_vector=query_embedding,
+            limit=limit,
+            score_threshold=score_threshold,
+            query_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="content_type",
+                        match=MatchValue(value="exercise_story")
+                    )
+                ]
+            )
+        )
+        
+        results = []
+        for point in search_result:
+            results.append({
+                'id': point.id,
+                'score': point.score,
+                'metadata': point.payload
+            })
+        
+        logger.info(f"Found {len(results)} similar stories for query: {query}")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error searching similar stories: {str(e)}")
+        return []
+
+async def delete_story_embedding(point_id: str) -> bool:
+    """
+    Delete story embedding from Qdrant.
+    
+    Args:
+        point_id: Qdrant point ID to delete
+        
+    Returns:
+        True if deleted successfully
+    """
+    try:
+        qdrant_client = get_qdrant_client()
+        qdrant_client.delete(
+            collection_name="fitness_video_clips",
+            points_selector=PointIdsList(points=[point_id])
+        )
+        
+        logger.info(f"Deleted story embedding with ID: {point_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error deleting story embedding: {str(e)}")
+        return False
